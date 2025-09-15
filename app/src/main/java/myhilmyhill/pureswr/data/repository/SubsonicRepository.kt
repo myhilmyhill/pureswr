@@ -93,8 +93,8 @@ private data class SubsonicError(
 )
 
 class SubsonicRepository(
-    private val baseUrl: String,
-    private val username: String,
+    internal val baseUrl: String, // Changed from private to internal
+    internal val username: String, // Changed from private to internal
     private val password: String,
     private val httpClientOverride: HttpClient? = null
 ) {
