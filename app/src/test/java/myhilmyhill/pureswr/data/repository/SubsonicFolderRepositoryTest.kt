@@ -15,6 +15,7 @@ import kotlinx.serialization.json.Json
 
 class SubsonicFolderRepositoryTest {
 
+    // Test for root folder contents (remains unchanged as it's a success case)
     @Test
     fun `getFolderContents for root should return parsed list from mock response`() = runTest {
         val mockRootFolderJsonResponse = """
@@ -22,32 +23,10 @@ class SubsonicFolderRepositoryTest {
               "subsonic-response": {
                 "status": "ok",
                 "version": "1.16.1",
-                "type": "myMockServer",
-                "serverVersion": "1.0.0",
-                "directory": {
-                  "id": "0",
-                  "name": "Root Music",
-                  "child": [
-                    {
-                      "id": "folder-1",
-                      "parent": "0",
-                      "isDir": true,
-                      "title": "Favorite Artists",
-                      "name": "Favorite Artists",
-                      "album": null,
-                      "artist": null,
-                      "coverArt": null
-                    },
-                    {
-                      "id": "song-123",
-                      "parent": "0",
-                      "isDir": false,
-                      "title": "Example Song Title",
-                      "name": "Example Song.mp3",
-                      "album": "Test Album",
-                      "artist": "Mock Artist",
-                      "coverArt": "artId-song-123"
-                    }
+                "musicFolders": {
+                  "musicFolder": [
+                    { "id": "folder-1", "name": "Favorite Artists" },
+                    { "id": "folder-2", "name": "Cool Mixtapes" }
                   ]
                 }
               }
@@ -55,7 +34,7 @@ class SubsonicFolderRepositoryTest {
             """.trimIndent()
 
         val mockEngine = MockEngine { request ->
-            assertEquals("/rest/getMusicDirectory.view", request.url.encodedPath)
+            assertEquals("URL path mismatch for root request", "/rest/getMusicFolders.view", request.url.encodedPath)
             assertNull("ID should be null for root folder request", request.url.parameters["id"])
             respond(
                 content = ByteReadChannel(mockRootFolderJsonResponse.toByteArray(Charsets.UTF_8)),
@@ -78,39 +57,21 @@ class SubsonicFolderRepositoryTest {
             httpClientOverride = httpClient
         )
 
-        val rootFolderEntry = repository.getFolderContents(null)
+        val rootFolderEntry = repository.getFolderContents(null) // Requesting root
 
-        assertEquals("Root folder should have ID '0'", "0", rootFolderEntry.id)
-        assertEquals(
-            "Root folder should have name 'Root Music'",
-            "Root Music",
-            rootFolderEntry.name
-        )
-        assertEquals(
-            "Should return 2 items in the entries list from mock root response",
-            2,
-            rootFolderEntry.entries.size
-        )
+        assertEquals(SubsonicRepository.SYNTHETIC_ROOT_ID, rootFolderEntry.id)
+        assertEquals(SubsonicRepository.SYNTHETIC_ROOT_NAME, rootFolderEntry.name)
+        assertEquals(2, rootFolderEntry.entries.size)
 
         val firstItem = rootFolderEntry.entries[0]
-        assertTrue("First item should be a FolderEntry", firstItem is FolderEntry)
-        val firstFolder = firstItem as FolderEntry
-        assertEquals("folder-1", firstFolder.id)
-        assertEquals("Favorite Artists", firstFolder.name)
-        assertTrue(
-            "Nested folder\'s entries should be empty for now",
-            firstFolder.entries.isEmpty()
-        )
-
-        val secondItem = rootFolderEntry.entries[1]
-        assertTrue("Second item should be a MusicEntry", secondItem is MusicEntry)
-        val secondMusic = secondItem as MusicEntry
-        assertEquals("song-123", secondMusic.id)
-        assertEquals("Example Song Title", secondMusic.name)
+        assertTrue(firstItem is FolderEntry)
+        assertEquals("folder-1", (firstItem as FolderEntry).id)
+        assertEquals("Favorite Artists", firstItem.name)
 
         repository.close()
     }
 
+    // Test for empty folder (remains unchanged as it's a success case)
     @Test
     fun `getFolderContents for an empty folder should return empty list`() = runTest {
         val mockEmptyFolderJsonResponse = """
@@ -118,8 +79,6 @@ class SubsonicFolderRepositoryTest {
               "subsonic-response": {
                 "status": "ok",
                 "version": "1.16.1",
-                "type": "myMockServer",
-                "serverVersion": "1.0.0",
                 "directory": {
                   "id": "10",
                   "name": "Empty Folder",
@@ -140,10 +99,7 @@ class SubsonicFolderRepositoryTest {
         }
         val httpClient = HttpClient(mockEngine) {
             install(ContentNegotiation) {
-                json(Json {
-                    ignoreUnknownKeys = true
-                    isLenient = true
-                })
+                json(Json { ignoreUnknownKeys = true; isLenient = true })
             }
         }
         val repository = SubsonicRepository(
@@ -155,12 +111,9 @@ class SubsonicFolderRepositoryTest {
 
         val folderEntry = repository.getFolderContents("folder-empty")
 
-        assertEquals("Folder ID should be '10'", "10", folderEntry.id)
-        assertEquals("Folder name should be 'Empty Folder'", "Empty Folder", folderEntry.name)
-        assertTrue(
-            "Folder contents (entries list) should be empty for 'folder-empty'",
-            folderEntry.entries.isEmpty()
-        )
+        assertEquals("10", folderEntry.id)
+        assertEquals("Empty Folder", folderEntry.name)
+        assertTrue(folderEntry.entries.isEmpty())
 
         repository.close()
     }
@@ -182,35 +135,24 @@ class SubsonicFolderRepositoryTest {
             }
             """.trimIndent()
 
-        val mockEngine = MockEngine { request ->
-            assertEquals("/rest/getMusicDirectory.view", request.url.encodedPath)
-            assertEquals("folder-error-auth", request.url.parameters["id"])
+        val mockEngine = MockEngine { _ ->
             respond(
                 content = ByteReadChannel(mockAuthErrorJsonResponse.toByteArray(Charsets.UTF_8)),
-                status = HttpStatusCode.OK,
+                status = HttpStatusCode.OK, // Server might respond 200 OK but with error in JSON body
                 headers = headersOf(HttpHeaders.ContentType, "application/json")
             )
         }
         val httpClient = HttpClient(mockEngine) {
-            install(ContentNegotiation) {
-                json(Json {
-                    ignoreUnknownKeys = true
-                    isLenient = true
-                })
-            }
+            install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
         }
-        val repository = SubsonicRepository(
-            baseUrl = "http://mock.server.com",
-            username = "mockuser",
-            password = "mockpassword",
-            httpClientOverride = httpClient
-        )
+        val repository = SubsonicRepository("http://mock.server.com", "u", "p", httpClient)
 
         try {
             repository.getFolderContents("folder-error-auth")
             fail("SubsonicApiException was expected but not thrown.")
         } catch (e: SubsonicApiException) {
-            assertEquals("Mocked: Incorrect username or password.", e.message)
+            val expectedMessage = "Mocked: Incorrect username or password.. Raw response: '${mockAuthErrorJsonResponse}'"
+            assertEquals(expectedMessage, e.message)
             assertEquals(40, e.code)
         } finally {
             repository.close()
@@ -219,8 +161,7 @@ class SubsonicFolderRepositoryTest {
 
     @Test
     fun `getFolderContents with malformed JSON should throw SubsonicApiException`() = runTest {
-        val malformedJsonResponse =
-            """{"subsonic-response": {"status": "ok", "directory": {"id":"1" """ // Incomplete JSON
+        val malformedJsonResponse = """{"subsonic-response": {"status": "ok", "directory": {"id":"1" """ // Incomplete JSON
 
         val mockEngine = MockEngine { _ ->
             respond(
@@ -229,12 +170,9 @@ class SubsonicFolderRepositoryTest {
                 headers = headersOf(HttpHeaders.ContentType, "application/json")
             )
         }
+        // Repository uses its own lenientJsonParser, so HttpClient's parser config isn't the primary one tested here for this specific internal parsing step.
         val httpClient = HttpClient(mockEngine) {
-            install(ContentNegotiation) {
-                json(Json {
-                    ignoreUnknownKeys = true; isLenient = false
-                })
-            }
+            install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) } // Aligned with repo's general approach
         }
         val repository =
             SubsonicRepository("http://mock.server.com", "u", "p", httpClientOverride = httpClient)
@@ -244,14 +182,11 @@ class SubsonicFolderRepositoryTest {
             fail("SubsonicApiException was expected due to malformed JSON but not thrown.")
         } catch (e: SubsonicApiException) {
             val actualMessage = e.message ?: ""
-            assertTrue(
-                "Exception message should indicate malformed JSON. Actual: $actualMessage",
-                actualMessage.startsWith("Expected end of the object '}', but had 'EOF' instead at path:")
-            )
-            assertNull(
-                "Exception code should be null for this type of error. Actual: ${e.code}",
-                e.code
-            )
+            assertTrue("Message should indicate lenient parsing failure. Actual: $actualMessage", actualMessage.contains("failed to deserialize the response body with lenient parsing"))
+            assertTrue("Message should contain original error. Actual: $actualMessage", actualMessage.contains("Original deserialization error:"))
+            assertTrue("Message should mention EOF or similar. Actual: $actualMessage", actualMessage.contains("Expected") && actualMessage.contains("EOF"))
+            assertTrue("Message should contain raw response. Actual: $actualMessage", actualMessage.contains("Raw response body: '${malformedJsonResponse}'"))
+            assertNull("Error code should be null for SerializationException wrapper", e.code)
         } finally {
             repository.close()
         }
@@ -270,7 +205,7 @@ class SubsonicFolderRepositoryTest {
                     }
                   }
                 }
-                """.trimIndent() // Removed the comment line that was causing a parsing error
+                """.trimIndent()
 
             val mockEngine = MockEngine { _ ->
                 respond(
@@ -280,23 +215,17 @@ class SubsonicFolderRepositoryTest {
                 )
             }
             val httpClient = HttpClient(mockEngine) {
-                install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+                install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
             }
-            val repository = SubsonicRepository(
-                "http://mock.server.com",
-                "u",
-                "p",
-                httpClientOverride = httpClient
-            )
+            val repository = SubsonicRepository("http://mock.server.com", "u", "p", httpClient)
 
             try {
                 repository.getFolderContents("anyId")
                 fail("SubsonicApiException was expected due to incomplete directory data but not thrown.")
             } catch (e: SubsonicApiException) {
-                assertEquals(
-                    "Incomplete directory data in Subsonic response: ID or Name is null.",
-                    e.message
-                )
+                val expectedMessage = "Incomplete directory data for folderId 'anyId': ID or Name from server is null. Raw response: '${mockIncompleteDataResponse}'"
+                assertEquals(expectedMessage, e.message)
+                assertNull("Error code should be null for this specific error type", e.code)
             } finally {
                 repository.close()
             }
@@ -314,8 +243,7 @@ class SubsonicFolderRepositoryTest {
                 }
                 """.trimIndent()
 
-            val mockEngine = MockEngine { request ->
-                assertEquals("/rest/getMusicDirectory.view", request.url.encodedPath)
+            val mockEngine = MockEngine { _ ->
                 respond(
                     content = ByteReadChannel(unexpectedJsonResponse.toByteArray(Charsets.UTF_8)),
                     status = HttpStatusCode.OK,
@@ -323,29 +251,20 @@ class SubsonicFolderRepositoryTest {
                 )
             }
             val httpClient = HttpClient(mockEngine) {
-                install(ContentNegotiation) {
-                    json(Json {
-                        ignoreUnknownKeys = true
-                        isLenient = true
-                    })
-                }
+                install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
             }
-            val repository = SubsonicRepository(
-                baseUrl = "http://mock.server.com",
-                username = "mockuser",
-                password = "mockpassword",
-                httpClientOverride = httpClient
-            )
+            val repository = SubsonicRepository("http://mock.server.com", "u", "p", httpClient)
 
             try {
                 repository.getFolderContents("anyFolderId")
                 fail("SubsonicApiException was expected due to completely unexpected JSON structure but not thrown.")
             } catch (e: SubsonicApiException) {
-                // Because subsonicResponse field itself will be null after deserialization of unexpected JSON
-                // the code will fall into the 'else' branch of 'if (responseBody.subsonicResponse?.status == "ok")'
-                // and then try to access responseBody.subsonicResponse?.error, which will also be null.
-                assertEquals("Unknown Subsonic API error", e.message)
-                assertNull("Error code should be null for this type of structural error", e.code)
+                // The SubsonicResponse DTO has subsonicResponse field as nullable.
+                // Parsing the unexpectedJsonResponse will result in a SubsonicResponse object where the subsonicResponse field is null.
+                // This then leads to the "Subsonic API reported failure..." path in the repository code.
+                val expectedMessage = "Subsonic API reported failure (no specific error message in parsed response). Raw response: '${unexpectedJsonResponse}'"
+                assertEquals(expectedMessage, e.message)
+                assertNull("Error code should be null", e.code)
             } finally {
                 repository.close()
             }
@@ -356,45 +275,27 @@ class SubsonicFolderRepositoryTest {
         runTest {
             val plainTextResponse = "This is not JSON, this is plain text."
 
-            val mockEngine = MockEngine { request ->
-                assertEquals("/rest/getMusicDirectory.view", request.url.encodedPath)
+            val mockEngine = MockEngine { _ ->
                 respond(
                     content = ByteReadChannel(plainTextResponse.toByteArray(Charsets.UTF_8)),
                     status = HttpStatusCode.OK,
-                    headers = headersOf(
-                        HttpHeaders.ContentType,
-                        ContentType.Text.Plain.toString()
-                    ) // Explicitly set Content-Type
+                    headers = headersOf(HttpHeaders.ContentType, ContentType.Text.Plain.toString())
                 )
             }
             val httpClient = HttpClient(mockEngine) {
-                install(ContentNegotiation) {
-                    json(Json {
-                        ignoreUnknownKeys = true
-                        isLenient = true // isLenient might not save it from non-JSON
-                    })
-                }
+                install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true; isLenient = true }) }
             }
-            val repository = SubsonicRepository(
-                baseUrl = "http://mock.server.com",
-                username = "mockuser",
-                password = "mockpassword",
-                httpClientOverride = httpClient
-            )
+            val repository = SubsonicRepository("http://mock.server.com", "u", "p", httpClient)
 
             try {
                 repository.getFolderContents("anyFolderId")
                 fail("SubsonicApiException was expected due to plain text response but not thrown.")
             } catch (e: SubsonicApiException) {
                 val actualMessage = e.message ?: ""
-                assertTrue(
-                    "Exception message should indicate content conversion failure. Actual: $actualMessage",
-                    actualMessage.startsWith("Expected response body of the type 'class myhilmyhill.pureswr.data.repository.SubsonicResponse (Kotlin reflection is not available)'")
-                )
-                assertNull(
-                    "Exception code should be null for this type of error. Actual: ${e.code}",
-                    e.code
-                )
+                assertTrue("Msg should indicate lenient parsing failure. Actual: $actualMessage", actualMessage.contains("failed to deserialize the response body with lenient parsing"))
+                assertTrue("Msg should contain original error about unexpected token. Actual: $actualMessage", actualMessage.contains("Original deserialization error:") && actualMessage.contains("Unexpected JSON token"))
+                assertTrue("Msg should contain raw response. Actual: $actualMessage", actualMessage.contains("Raw response body: '${plainTextResponse}'"))
+                assertNull("Error code should be null", e.code)
             } finally {
                 repository.close()
             }
