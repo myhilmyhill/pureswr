@@ -63,6 +63,7 @@ dependencies {
     implementation(libs.lifecycle.viewmodel.compose)
     testImplementation(libs.junit)
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0") // Added for coroutine testing
+    testImplementation("io.ktor:ktor-client-mock:2.3.4") // Added Ktor client mock
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -1,6 +1,7 @@
 package myhilmyhill.pureswr
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -37,7 +39,11 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import myhilmyhill.pureswr.data.model.Credentials
 import myhilmyhill.pureswr.data.preferences.UserPreferencesRepository
 import myhilmyhill.pureswr.data.repository.Entry
@@ -55,8 +61,9 @@ enum class LoadingState {
     ERROR
 }
 
-// Sentinel object to represent the state before credentials have been loaded from DataStore
 private object CredentialsLoadingMarker
+
+const val TAG = "FolderLoadEffect"
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -74,90 +81,137 @@ class MainActivity : ComponentActivity() {
             PureswrTheme {
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
-                // credentialsLoadingState can be CredentialsLoadingMarker initially, then Credentials?, or null.
                 val credentialsLoadingState: Any? by userPreferencesRepository.credentialsFlow
                     .collectAsStateWithLifecycle(initialValue = CredentialsLoadingMarker)
 
                 var showSettingsDialog by remember { mutableStateOf(false) }
-                // This flag tracks if we have made the initial decision about showing the settings dialog.
                 var initialDialogDecisionMade by remember { mutableStateOf(false) }
 
-                var currentFolderId by remember { mutableStateOf<String?>(null) }
-                var currentFolderName by remember { mutableStateOf("") }
+                var currentFolderId by remember { mutableStateOf<String?>("al-1") } 
+                var currentFolderName by remember { mutableStateOf("") } 
                 var folderEntries by remember { mutableStateOf<List<Entry>>(emptyList()) }
                 var folderLoadingState by remember { mutableStateOf(LoadingState.IDLE) }
                 var folderLoadError by remember { mutableStateOf<String?>(null) }
                 var folderHistory by remember { mutableStateOf<List<Pair<String?, String>>>(emptyList()) }
 
-                // Derived state: actual Credentials object or null, once loaded.
                 val actualCredentials = if (credentialsLoadingState === CredentialsLoadingMarker) {
-                    null // Not yet loaded
+                    null
                 } else {
-                    credentialsLoadingState as? Credentials // Loaded, could be null or Credentials obj
+                    credentialsLoadingState as? Credentials
                 }
 
-                // Effect to decide if the initial settings dialog should be shown, once and only once.
                 LaunchedEffect(credentialsLoadingState, initialDialogDecisionMade) {
                     if (credentialsLoadingState !== CredentialsLoadingMarker && !initialDialogDecisionMade) {
-                        // Credentials have loaded and we haven'''t made the initial dialog decision yet.
                         if (actualCredentials == null) {
-                            // If, after the initial load, credentials are confirmed to be null,
-                            // then show the settings dialog.
                             showSettingsDialog = true
                         }
-                        // Mark that we'''ve made the initial decision, regardless of whether dialog was shown.
                         initialDialogDecisionMade = true
                     }
                 }
 
-                // Effect to manage SubsonicRepository and reset folder state when actualCredentials change
                 LaunchedEffect(actualCredentials) {
+                    Log.d(TAG, "actualCredentials changed: $actualCredentials")
                     if (actualCredentials != null) {
                         if (subsonicRepository?.matchesCredentials(actualCredentials) != true || subsonicRepository == null) {
+                            Log.d(TAG, "Re-initializing SubsonicRepository and setting initial folder.")
                             subsonicRepository = SubsonicRepository(
                                 baseUrl = actualCredentials.baseUrl,
                                 username = actualCredentials.username,
                                 password = actualCredentials.password
                             )
-                            // Reset to root folder when credentials change or are first loaded
-                            currentFolderId = SubsonicRepository.SYNTHETIC_ROOT_ID
-                            currentFolderName = SubsonicRepository.SYNTHETIC_ROOT_NAME // Or fetch from getFolderContents
+                            currentFolderId = "al-1" 
+                            currentFolderName = "" 
                             folderHistory = emptyList()
                             folderEntries = emptyList()
-                            folderLoadingState = LoadingState.IDLE // Trigger reload for the new repo/creds
-                        }
-                    } else { // actualCredentials is null
-                        if (subsonicRepository != null) {
-                            subsonicRepository = null // Clear repository if credentials are cleared
-                            folderEntries = emptyList()
+                            Log.d(TAG, "actualCredentials - Setting folderLoadingState to IDLE (repo re-init)")
                             folderLoadingState = LoadingState.IDLE
-                            currentFolderId = null
+                        }
+                    } else {
+                        if (subsonicRepository != null) {
+                            Log.d(TAG, "Clearing SubsonicRepository because actualCredentials are null.")
+                            subsonicRepository = null
+                            folderEntries = emptyList()
+                            Log.d(TAG, "actualCredentials - Setting folderLoadingState to IDLE (repo cleared)")
+                            folderLoadingState = LoadingState.IDLE
+                            currentFolderId = null 
                             currentFolderName = ""
                             folderHistory = emptyList()
                         }
                     }
                 }
 
-                // Effect to load folder contents
-                LaunchedEffect(subsonicRepository, currentFolderId, folderLoadingState) {
+                LaunchedEffect(subsonicRepository, currentFolderId) { 
+                    Log.d(TAG, "FolderLoadEffect Triggered: repo=${subsonicRepository != null}, folderId=$currentFolderId, state=$folderLoadingState")
                     if (subsonicRepository != null && currentFolderId != null && folderLoadingState == LoadingState.IDLE) {
+                        val folderIdToLoad = currentFolderId // Capture non-null value
+                        
+                        Log.d(TAG, "FolderLoadEffect: Condition met. Setting state to LOADING for folderId: $folderIdToLoad")
                         folderLoadingState = LoadingState.LOADING
                         folderLoadError = null
                         try {
-                            // Ensure currentFolderName is updated based on actual loaded folder
-                            val result = subsonicRepository!!.getFolderContents(currentFolderId!!) // currentFolderId known not null here
-                            folderEntries = result.entries
-                            currentFolderName = result.name
-                            folderLoadingState = LoadingState.SUCCESS
+                            Log.d(TAG, "FolderLoadEffect: Entering try block for folderId: $folderIdToLoad. Switching to Dispatchers.IO.")
+                            val result = withContext(Dispatchers.IO) {
+                                Log.d(TAG, "FolderLoadEffect: Inside Dispatchers.IO for folderId: $folderIdToLoad. Preparing to call getFolderContents with timeout.")
+                                withTimeoutOrNull(20000L) { // 20 seconds timeout
+                                    Log.d(TAG, "FolderLoadEffect: Calling subsonicRepository.getFolderContents for folderId: $folderIdToLoad")
+                                    val folderResult = subsonicRepository!!.getFolderContents(folderIdToLoad) // Use captured value
+                                    Log.d(TAG, "FolderLoadEffect: subsonicRepository.getFolderContents returned for folderId: $folderIdToLoad. Result: $folderResult")
+                                    folderResult // Return the result
+                                }
+                            }
+                            Log.d(TAG, "FolderLoadEffect: Returned from withContext(Dispatchers.IO) for folderId: $folderIdToLoad. Raw result: $result")
+
+                            if (result == null) { // Timeout occurred
+                                if (isActive) {
+                                    val errorMsg = "Error: Folder loading timed out for folderId: $folderIdToLoad."
+                                    Log.e(TAG, "FolderLoadEffect: Timeout occurred. $errorMsg")
+                                    folderLoadError = errorMsg
+                                    folderLoadingState = LoadingState.ERROR
+                                    Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
+                                } else {
+                                    Log.d(TAG, "FolderLoadEffect: Timeout occurred but coroutine is no longer active for folderId: $folderIdToLoad.")
+                                }
+                            } else { // Successful load
+                                if (isActive) {
+                                    Log.d(TAG, "FolderLoadEffect: Load successful for folderId: $folderIdToLoad. Entries count: ${result.entries.size}, Folder name: ${result.name}")
+                                    folderEntries = result.entries
+                                    currentFolderName = result.name
+                                    folderLoadingState = LoadingState.SUCCESS
+                                } else {
+                                    Log.d(TAG, "FolderLoadEffect: Load successful but coroutine is no longer active for folderId: $folderIdToLoad.")
+                                }
+                            }
                         } catch (e: SubsonicApiException) {
-                            folderLoadError = "API Error: ${e.message} (Code: ${e.code ?: "N/A"})"
-                            folderLoadingState = LoadingState.ERROR
-                            Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
+                            if (isActive) {
+                                val errorMsg = "API Error: ${e.message} (Code: ${e.code ?: "N/A"}) for folderId: $folderIdToLoad"
+                                Log.e(TAG, "FolderLoadEffect: SubsonicApiException. $errorMsg", e)
+                                folderLoadError = errorMsg
+                                folderLoadingState = LoadingState.ERROR
+                                Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
+                            } else {
+                                Log.d(TAG, "FolderLoadEffect: SubsonicApiException but coroutine is no longer active for folderId: $folderIdToLoad. This might indicate an issue if it still happens.", e)
+                                val errorMsg = "API Error (coroutine inactive): ${e.message} (Code: ${e.code ?: "N/A"}) for folderId: $folderIdToLoad"
+                                folderLoadError = errorMsg
+                                folderLoadingState = LoadingState.ERROR
+                                Toast.makeText(context, "Folder load failed (coroutine became inactive).", Toast.LENGTH_LONG).show()                                
+                            }
                         } catch (e: Exception) {
-                            folderLoadError = "Error loading folder: ${e.message}"
-                            folderLoadingState = LoadingState.ERROR
-                            Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
+                            if (isActive) {
+                                val errorMsg = "Error loading folder: ${e.message} for folderId: $folderIdToLoad"
+                                Log.e(TAG, "FolderLoadEffect: Generic Exception. $errorMsg", e)
+                                folderLoadError = errorMsg
+                                folderLoadingState = LoadingState.ERROR
+                                Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
+                            } else {
+                                Log.d(TAG, "FolderLoadEffect: Generic Exception but coroutine is no longer active for folderId: $folderIdToLoad. This might indicate an issue if it still happens.", e)
+                                val errorMsg = "Generic error (coroutine inactive): ${e.message} for folderId: $folderIdToLoad"
+                                folderLoadError = errorMsg
+                                folderLoadingState = LoadingState.ERROR
+                                Toast.makeText(context, "Folder load failed (coroutine became inactive).", Toast.LENGTH_LONG).show()
+                            }
                         }
+                    } else {
+                        Log.d(TAG, "FolderLoadEffect Skipped: repo=${subsonicRepository != null}, folderId=$currentFolderId, state=$folderLoadingState")
                     }
                 }
 
@@ -165,23 +219,23 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     topBar = {
                         TopAppBar(
-                            title = { Text(if (actualCredentials == null || (folderHistory.isEmpty() && currentFolderName == SubsonicRepository.SYNTHETIC_ROOT_NAME)) "PureSWR" else currentFolderName) },
+                            title = { Text(if (actualCredentials == null) "PureSWR" else currentFolderName.ifEmpty { if(currentFolderId == "al-1") "Loading Album..." else "Loading..."} ) }, 
                             navigationIcon = {
                                 if (folderHistory.isNotEmpty()) {
                                     IconButton(onClick = {
                                         val previousFolder = folderHistory.last()
+                                        Log.d(TAG, "Navigation Back: to folderId=${previousFolder.first}, name=${previousFolder.second}")
                                         currentFolderId = previousFolder.first
-                                        // currentFolderName = previousFolder.second // Will be updated on load
                                         folderHistory = folderHistory.dropLast(1)
-                                        folderLoadingState = LoadingState.IDLE // Trigger reload for previous folder
+                                        Log.d(TAG, "Navigation Back - Setting folderLoadingState to IDLE")
+                                        folderLoadingState = LoadingState.IDLE
                                     }) {
-                                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                                     }
                                 }
                             },
                             actions = {
                                 IconButton(onClick = {
-                                    // User explicitly opens settings
                                     showSettingsDialog = true
                                 }) {
                                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
@@ -192,35 +246,26 @@ class MainActivity : ComponentActivity() {
                 ) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
                         if (credentialsLoadingState === CredentialsLoadingMarker) {
-                            // Show a global loading indicator while credentials are being loaded initially.
                             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                 CircularProgressIndicator()
                                 Text("Loading settings...", modifier = Modifier.padding(top = 70.dp))
                             }
                         } else if (showSettingsDialog) {
-                            // Show settings dialog if showSettingsDialog is true (either by initial check or user action)
                             SettingsDialog(
                                 currentBaseUrl = actualCredentials?.baseUrl ?: "",
                                 currentUsername = actualCredentials?.username ?: "",
                                 currentPassword = actualCredentials?.password ?: "",
                                 onDismissRequest = {
                                     showSettingsDialog = false
-                                    // If dismissed without saving and credentials are still null,
-                                    // the `else if (actualCredentials == null)` block below will handle showing the prompt.
                                 },
                                 onSave = { newCredentials ->
                                     scope.launch {
                                         userPreferencesRepository.saveCredentials(newCredentials)
                                     }
-                                    // Saving credentials will trigger `actualCredentials` update via Flow.
-                                    // `LaunchedEffect(actualCredentials)` will handle repo re-init.
-                                    // `initialDialogDecisionMade` is already true, so initial dialog logic won'''t re-run.
-                                    showSettingsDialog = false // Explicitly hide after save.
+                                    showSettingsDialog = false
                                 }
                             )
                         } else if (actualCredentials == null) {
-                            // Credentials loading is complete, they are null, and dialog is not (or no longer) shown.
-                            // This state means user needs to configure.
                             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text("Please configure your Subsonic server.")
@@ -231,34 +276,37 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         } else if (subsonicRepository != null && currentFolderId != null) {
-                            // Credentials are available, repository is initialized, and a folder is selected.
+                            Log.d("UI_STATE_CHECK", "Evaluating UI for folder. folderLoadingState is $folderLoadingState, currentFolderId is $currentFolderId")
                             when (folderLoadingState) {
                                 LoadingState.LOADING -> {
+                                    Log.d("UI_STATE_CHECK", "Displaying LOADING UI for $currentFolderName")
                                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                         CircularProgressIndicator()
                                         Text(
-                                            if (currentFolderName.isNotEmpty() && currentFolderName != SubsonicRepository.SYNTHETIC_ROOT_NAME) "Loading $currentFolderName..." else "Loading...",
+                                            if (currentFolderName.isNotEmpty()) "Loading $currentFolderName..." else "Loading...", 
                                             modifier = Modifier.padding(top = 70.dp)
                                         )
                                     }
                                 }
                                 LoadingState.SUCCESS -> {
+                                    Log.d("UI_STATE_CHECK", "Displaying SUCCESS UI for $currentFolderName")
                                     FolderDisplay(
                                         modifier = Modifier.fillMaxSize(),
                                         entries = folderEntries,
                                         onFolderClick = { folder ->
-                                            folderHistory = folderHistory + (currentFolderId to currentFolderName) // Save current state
+                                            Log.d(TAG, "FolderClick: to folderId=${folder.id}, name=${folder.name}")
+                                            folderHistory = folderHistory + (currentFolderId to currentFolderName)
                                             currentFolderId = folder.id
-                                            // currentFolderName = folder.name // Will be updated by LaunchedEffect on load
+                                            Log.d(TAG, "FolderClick - Setting folderLoadingState to IDLE")
                                             folderLoadingState = LoadingState.IDLE
                                         },
                                         onFileClick = { file ->
                                             Toast.makeText(context, "Clicked file: ${file.name}", Toast.LENGTH_SHORT).show()
-                                            // TODO: Implement music playback
                                         }
                                     )
                                 }
                                 LoadingState.ERROR -> {
+                                    Log.d("UI_STATE_CHECK", "Displaying ERROR UI for $currentFolderName. Error: $folderLoadError")
                                     Column(
                                         modifier = Modifier.fillMaxSize().padding(16.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -267,13 +315,16 @@ class MainActivity : ComponentActivity() {
                                         Text("Failed to load folder: ${currentFolderName.ifEmpty { "selected folder" }}")
                                         folderLoadError?.let { Text(it, modifier = Modifier.padding(vertical = 8.dp)) }
                                         Spacer(Modifier.height(16.dp))
-                                        Button(onClick = { folderLoadingState = LoadingState.IDLE }) { // Retry
+                                        Button(onClick = { 
+                                            Log.d(TAG, "Retry button clicked - Setting folderLoadingState to IDLE")
+                                            folderLoadingState = LoadingState.IDLE
+                                        }) { 
                                             Text("Retry")
                                         }
                                     }
                                 }
                                 LoadingState.IDLE -> {
-                                    // This state should be brief if repo and folderId are set.
+                                    Log.d("UI_STATE_CHECK", "Displaying IDLE UI for $currentFolderName")
                                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                         CircularProgressIndicator()
                                         Text("Initializing folder view...", modifier = Modifier.padding(top = 70.dp))
@@ -281,15 +332,13 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         } else if (actualCredentials != null && subsonicRepository == null) {
-                            // Credentials available, but repository not yet initialized (should be very brief)
                              Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                 CircularProgressIndicator()
                                 Text("Connecting to server...", modifier = Modifier.padding(top = 70.dp))
                             }
                         } else {
-                            // Fallback for any other unhandled state (e.g. currentFolderId is null but creds exist)
                              Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                Text("Please select a folder or check settings.") // Or a more specific loading/error
+                                Text("Please select a folder or check settings.")
                             }
                         }
                     }
@@ -299,16 +348,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Helper extension for SubsonicRepository to check if it matches given credentials
 fun SubsonicRepository.matchesCredentials(creds: Credentials): Boolean {
-    return this.baseUrl == creds.baseUrl && this.username == creds.username // Password comparison might not be directly possible/needed if instance is re-created
+    return this.baseUrl == creds.baseUrl && this.username == creds.username
 }
 
 @Preview(showBackground = true)
 @Composable
 fun GreetingPreview() {
     PureswrTheme {
-        // Minimal preview, as MainActivity is complex
         Text("PureSWR App Preview")
     }
 }

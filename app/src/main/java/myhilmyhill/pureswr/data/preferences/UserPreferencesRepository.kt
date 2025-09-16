@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged // Added
 import kotlinx.coroutines.flow.map
 import myhilmyhill.pureswr.data.model.Credentials
 import java.io.IOException
@@ -44,6 +45,7 @@ class UserPreferencesRepository(private val context: Context) {
                 null // Not all credentials are set
             }
         }
+        .distinctUntilChanged() // Added this line
 
     suspend fun saveCredentials(credentials: Credentials) {
         context.credentialsDataStore.edit { preferences ->
