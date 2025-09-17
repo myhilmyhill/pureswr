@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import myhilmyhill.pureswr.data.model.Credentials // Make sure this path is correct
@@ -39,23 +40,21 @@ fun SettingsDialog(
                 OutlinedTextField(
                     value = baseUrl,
                     onValueChange = { baseUrl = it },
-                    label = { Text("Server Base URL (e.g., http://your.server.com)") },
+                    label = { Text("Server Base URL") },
                     singleLine = true
                 )
-                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
                     label = { Text("Username") },
                     singleLine = true
                 )
-                Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = password,
                     onValueChange = { password = it },
                     label = { Text("Password") },
-                    singleLine = true
-                    // Consider using PasswordVisualTransformation for password field
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation()
                 )
             }
         },

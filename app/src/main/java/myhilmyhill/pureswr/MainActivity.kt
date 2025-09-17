@@ -1,11 +1,10 @@
 package myhilmyhill.pureswr
 
 import android.os.Bundle
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -63,8 +61,6 @@ enum class LoadingState {
 
 private object CredentialsLoadingMarker
 
-const val TAG = "FolderLoadEffect"
-
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
@@ -97,6 +93,15 @@ class MainActivity : ComponentActivity() {
                     null
                 } else {
                     credentialsLoadingState as? Credentials
+                }
+
+                if (folderHistory.isNotEmpty() && !showSettingsDialog && actualCredentials != null) {
+                    BackHandler {
+                        val previousFolder = folderHistory.last()
+                        currentFolderId = previousFolder.first
+                        folderHistory = folderHistory.dropLast(1)
+                        folderLoadingState = LoadingState.IDLE
+                    }
                 }
 
                 LaunchedEffect(credentialsLoadingState, initialDialogDecisionMade) {
@@ -249,7 +254,6 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         } else if (subsonicRepository != null && currentFolderId != null) {
-                            Log.d("UI_STATE_CHECK", "Evaluating UI for folder. folderLoadingState is $folderLoadingState, currentFolderId is $currentFolderId")
                             when (folderLoadingState) {
                                 LoadingState.LOADING -> {
                                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
@@ -265,14 +269,13 @@ class MainActivity : ComponentActivity() {
                                         modifier = Modifier.fillMaxSize(),
                                         entries = folderEntries,
                                         onFolderClick = { folder ->
-                                            Log.d(TAG, "FolderClick: to folderId=${folder.id}, name=${folder.name}")
+                                            // Navigation push
                                             folderHistory = folderHistory + (currentFolderId to currentFolderName)
                                             currentFolderId = folder.id
-                                            Log.d(TAG, "FolderClick - Setting folderLoadingState to IDLE")
                                             folderLoadingState = LoadingState.IDLE
                                         },
                                         onFileClick = { file ->
-                                            Toast.makeText(context, "Clicked file: ${file.name}", Toast.LENGTH_SHORT).show()
+                                            // Play music
                                         }
                                     )
                                 }
@@ -286,7 +289,6 @@ class MainActivity : ComponentActivity() {
                                         folderLoadError?.let { Text(it, modifier = Modifier.padding(vertical = 8.dp)) }
                                         Spacer(Modifier.height(16.dp))
                                         Button(onClick = { 
-                                            Log.d(TAG, "Retry button clicked - Setting folderLoadingState to IDLE")
                                             folderLoadingState = LoadingState.IDLE
                                         }) { 
                                             Text("Retry")
