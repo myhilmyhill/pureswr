@@ -76,7 +76,6 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
         setContent {
             PureswrTheme {
                 val context = LocalContext.current
@@ -110,10 +109,8 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(actualCredentials) {
-                    Log.d(TAG, "actualCredentials changed: $actualCredentials")
                     if (actualCredentials != null) {
                         if (subsonicRepository?.matchesCredentials(actualCredentials) != true || subsonicRepository == null) {
-                            Log.d(TAG, "Re-initializing SubsonicRepository and setting initial folder.")
                             subsonicRepository = SubsonicRepository(
                                 baseUrl = actualCredentials.baseUrl,
                                 username = actualCredentials.username,
@@ -123,15 +120,12 @@ class MainActivity : ComponentActivity() {
                             currentFolderName = "" 
                             folderHistory = emptyList()
                             folderEntries = emptyList()
-                            Log.d(TAG, "actualCredentials - Setting folderLoadingState to IDLE (repo re-init)")
                             folderLoadingState = LoadingState.IDLE
                         }
                     } else {
                         if (subsonicRepository != null) {
-                            Log.d(TAG, "Clearing SubsonicRepository because actualCredentials are null.")
                             subsonicRepository = null
                             folderEntries = emptyList()
-                            Log.d(TAG, "actualCredentials - Setting folderLoadingState to IDLE (repo cleared)")
                             folderLoadingState = LoadingState.IDLE
                             currentFolderId = null 
                             currentFolderName = ""
@@ -141,55 +135,40 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(subsonicRepository, currentFolderId) { 
-                    Log.d(TAG, "FolderLoadEffect Triggered: repo=${subsonicRepository != null}, folderId=$currentFolderId, state=$folderLoadingState")
                     if (subsonicRepository != null && currentFolderId != null && folderLoadingState == LoadingState.IDLE) {
                         val folderIdToLoad = currentFolderId // Capture non-null value
                         
-                        Log.d(TAG, "FolderLoadEffect: Condition met. Setting state to LOADING for folderId: $folderIdToLoad")
                         folderLoadingState = LoadingState.LOADING
                         folderLoadError = null
                         try {
-                            Log.d(TAG, "FolderLoadEffect: Entering try block for folderId: $folderIdToLoad. Switching to Dispatchers.IO.")
                             val result = withContext(Dispatchers.IO) {
-                                Log.d(TAG, "FolderLoadEffect: Inside Dispatchers.IO for folderId: $folderIdToLoad. Preparing to call getFolderContents with timeout.")
                                 withTimeoutOrNull(20000L) { // 20 seconds timeout
-                                    Log.d(TAG, "FolderLoadEffect: Calling subsonicRepository.getFolderContents for folderId: $folderIdToLoad")
                                     val folderResult = subsonicRepository!!.getFolderContents(folderIdToLoad) // Use captured value
-                                    Log.d(TAG, "FolderLoadEffect: subsonicRepository.getFolderContents returned for folderId: $folderIdToLoad. Result: $folderResult")
                                     folderResult // Return the result
                                 }
                             }
-                            Log.d(TAG, "FolderLoadEffect: Returned from withContext(Dispatchers.IO) for folderId: $folderIdToLoad. Raw result: $result")
 
                             if (result == null) { // Timeout occurred
                                 if (isActive) {
                                     val errorMsg = "Error: Folder loading timed out for folderId: $folderIdToLoad."
-                                    Log.e(TAG, "FolderLoadEffect: Timeout occurred. $errorMsg")
                                     folderLoadError = errorMsg
                                     folderLoadingState = LoadingState.ERROR
                                     Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
-                                } else {
-                                    Log.d(TAG, "FolderLoadEffect: Timeout occurred but coroutine is no longer active for folderId: $folderIdToLoad.")
                                 }
                             } else { // Successful load
                                 if (isActive) {
-                                    Log.d(TAG, "FolderLoadEffect: Load successful for folderId: $folderIdToLoad. Entries count: ${result.entries.size}, Folder name: ${result.name}")
                                     folderEntries = result.entries
                                     currentFolderName = result.name
                                     folderLoadingState = LoadingState.SUCCESS
-                                } else {
-                                    Log.d(TAG, "FolderLoadEffect: Load successful but coroutine is no longer active for folderId: $folderIdToLoad.")
                                 }
                             }
                         } catch (e: SubsonicApiException) {
                             if (isActive) {
                                 val errorMsg = "API Error: ${e.message} (Code: ${e.code ?: "N/A"}) for folderId: $folderIdToLoad"
-                                Log.e(TAG, "FolderLoadEffect: SubsonicApiException. $errorMsg", e)
                                 folderLoadError = errorMsg
                                 folderLoadingState = LoadingState.ERROR
                                 Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
                             } else {
-                                Log.d(TAG, "FolderLoadEffect: SubsonicApiException but coroutine is no longer active for folderId: $folderIdToLoad. This might indicate an issue if it still happens.", e)
                                 val errorMsg = "API Error (coroutine inactive): ${e.message} (Code: ${e.code ?: "N/A"}) for folderId: $folderIdToLoad"
                                 folderLoadError = errorMsg
                                 folderLoadingState = LoadingState.ERROR
@@ -198,20 +177,16 @@ class MainActivity : ComponentActivity() {
                         } catch (e: Exception) {
                             if (isActive) {
                                 val errorMsg = "Error loading folder: ${e.message} for folderId: $folderIdToLoad"
-                                Log.e(TAG, "FolderLoadEffect: Generic Exception. $errorMsg", e)
                                 folderLoadError = errorMsg
                                 folderLoadingState = LoadingState.ERROR
                                 Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
                             } else {
-                                Log.d(TAG, "FolderLoadEffect: Generic Exception but coroutine is no longer active for folderId: $folderIdToLoad. This might indicate an issue if it still happens.", e)
                                 val errorMsg = "Generic error (coroutine inactive): ${e.message} for folderId: $folderIdToLoad"
                                 folderLoadError = errorMsg
                                 folderLoadingState = LoadingState.ERROR
                                 Toast.makeText(context, "Folder load failed (coroutine became inactive).", Toast.LENGTH_LONG).show()
                             }
                         }
-                    } else {
-                        Log.d(TAG, "FolderLoadEffect Skipped: repo=${subsonicRepository != null}, folderId=$currentFolderId, state=$folderLoadingState")
                     }
                 }
 
@@ -219,15 +194,13 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     topBar = {
                         TopAppBar(
-                            title = { Text(if (actualCredentials == null) "PureSWR" else currentFolderName.ifEmpty { if(currentFolderId == "al-1") "Loading Album..." else "Loading..."} ) }, 
+                            title = { Text(currentFolderName.ifEmpty { if(currentFolderId == "al-1") "Loading Album..." else "Loading..."} ) },
                             navigationIcon = {
                                 if (folderHistory.isNotEmpty()) {
                                     IconButton(onClick = {
                                         val previousFolder = folderHistory.last()
-                                        Log.d(TAG, "Navigation Back: to folderId=${previousFolder.first}, name=${previousFolder.second}")
                                         currentFolderId = previousFolder.first
                                         folderHistory = folderHistory.dropLast(1)
-                                        Log.d(TAG, "Navigation Back - Setting folderLoadingState to IDLE")
                                         folderLoadingState = LoadingState.IDLE
                                     }) {
                                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -279,7 +252,6 @@ class MainActivity : ComponentActivity() {
                             Log.d("UI_STATE_CHECK", "Evaluating UI for folder. folderLoadingState is $folderLoadingState, currentFolderId is $currentFolderId")
                             when (folderLoadingState) {
                                 LoadingState.LOADING -> {
-                                    Log.d("UI_STATE_CHECK", "Displaying LOADING UI for $currentFolderName")
                                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                         CircularProgressIndicator()
                                         Text(
@@ -289,7 +261,6 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 LoadingState.SUCCESS -> {
-                                    Log.d("UI_STATE_CHECK", "Displaying SUCCESS UI for $currentFolderName")
                                     FolderDisplay(
                                         modifier = Modifier.fillMaxSize(),
                                         entries = folderEntries,
@@ -306,7 +277,6 @@ class MainActivity : ComponentActivity() {
                                     )
                                 }
                                 LoadingState.ERROR -> {
-                                    Log.d("UI_STATE_CHECK", "Displaying ERROR UI for $currentFolderName. Error: $folderLoadError")
                                     Column(
                                         modifier = Modifier.fillMaxSize().padding(16.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
@@ -324,7 +294,6 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 LoadingState.IDLE -> {
-                                    Log.d("UI_STATE_CHECK", "Displaying IDLE UI for $currentFolderName")
                                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                         CircularProgressIndicator()
                                         Text("Initializing folder view...", modifier = Modifier.padding(top = 70.dp))
