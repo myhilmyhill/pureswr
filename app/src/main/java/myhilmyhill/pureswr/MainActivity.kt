@@ -2,8 +2,9 @@ package myhilmyhill.pureswr
 
 import android.os.Bundle
 import android.widget.Toast
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,12 +33,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -88,6 +92,8 @@ class MainActivity : ComponentActivity() {
                 var folderLoadingState by remember { mutableStateOf(LoadingState.IDLE) }
                 var folderLoadError by remember { mutableStateOf<String?>(null) }
                 var folderHistory by remember { mutableStateOf<List<Pair<String?, String>>>(emptyList()) }
+                
+                var currentBackEvent by remember { mutableStateOf<BackEventCompat?>(null) }
 
                 val actualCredentials = if (credentialsLoadingState === CredentialsLoadingMarker) {
                     null
@@ -95,12 +101,23 @@ class MainActivity : ComponentActivity() {
                     credentialsLoadingState as? Credentials
                 }
 
+                // PredictiveBackHandler for folder navigation
                 if (folderHistory.isNotEmpty() && !showSettingsDialog && actualCredentials != null) {
-                    BackHandler {
-                        val previousFolder = folderHistory.last()
-                        currentFolderId = previousFolder.first
-                        folderHistory = folderHistory.dropLast(1)
-                        folderLoadingState = LoadingState.IDLE
+                    PredictiveBackHandler(enabled = true) { progress: Flow<BackEventCompat> ->
+                        try {
+                            progress.collect { event ->
+                                currentBackEvent = event
+                            }
+                            // Back gesture committed
+                            val previousFolder = folderHistory.last()
+                            currentFolderId = previousFolder.first
+                            folderHistory = folderHistory.dropLast(1)
+                            folderLoadingState = LoadingState.IDLE
+                        } catch (e: CancellationException) {
+                            // Back gesture cancelled
+                        } finally {
+                            currentBackEvent = null
+                        }
                     }
                 }
 
@@ -203,6 +220,8 @@ class MainActivity : ComponentActivity() {
                             navigationIcon = {
                                 if (folderHistory.isNotEmpty()) {
                                     IconButton(onClick = {
+                                        // Trigger predictive back programmatically (if needed, or rely on system)
+                                        // For now, this button might feel redundant if gesture is primary
                                         val previousFolder = folderHistory.last()
                                         currentFolderId = previousFolder.first
                                         folderHistory = folderHistory.dropLast(1)
@@ -265,11 +284,29 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 LoadingState.SUCCESS -> {
+                                    val folderDisplayModifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer {
+                                            currentBackEvent?.let { event ->
+                                                val progress = event.progress
+                                                scaleX = 1f - progress * 0.1f
+                                                scaleY = 1f - progress * 0.1f
+                                                alpha = 1f - progress * 0.3f
+                                                translationX = when (event.swipeEdge) {
+                                                    BackEventCompat.EDGE_LEFT -> progress * size.width * 0.2f
+                                                    BackEventCompat.EDGE_RIGHT -> progress * -size.width * 0.2f
+                                                    else -> 0f
+                                                }
+                                                // Reset translation if progress is minimal to avoid jitter
+                                                if (progress < 0.01f) {
+                                                    translationX = 0f
+                                                }
+                                            }
+                                        }
                                     FolderDisplay(
-                                        modifier = Modifier.fillMaxSize(),
+                                        modifier = folderDisplayModifier,
                                         entries = folderEntries,
                                         onFolderClick = { folder ->
-                                            // Navigation push
                                             folderHistory = folderHistory + (currentFolderId to currentFolderName)
                                             currentFolderId = folder.id
                                             folderLoadingState = LoadingState.IDLE
