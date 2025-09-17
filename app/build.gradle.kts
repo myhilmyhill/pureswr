@@ -82,4 +82,8 @@ dependencies {
     implementation("io.ktor:ktor-client-okhttp:2.3.4")
     implementation("io.ktor:ktor-client-content-negotiation:2.3.4")
     implementation("io.ktor:ktor-serialization-kotlinx-json:2.3.4")
+
+    // ExoPlayer dependencies
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-session:1.3.1")
 }

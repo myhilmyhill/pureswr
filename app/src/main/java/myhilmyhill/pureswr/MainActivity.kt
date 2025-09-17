@@ -1,5 +1,6 @@
 package myhilmyhill.pureswr
 
+import android.net.Uri // Added for ExoPlayer
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.BackEventCompat
@@ -25,6 +26,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect // Added for ExoPlayer
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +40,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.MediaItem // Added for ExoPlayer
+import androidx.media3.exoplayer.ExoPlayer // Added for ExoPlayer
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -71,7 +75,8 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var userPreferencesRepository: UserPreferencesRepository
 
-    private var subsonicRepository: SubsonicRepository? by mutableStateOf(null)
+    // subsonicRepository is now initialized within setContent's LaunchedEffect for better state handling with actualCredentials
+    // private var subsonicRepository: SubsonicRepository? by mutableStateOf(null) // Moved for clarity
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -100,6 +105,20 @@ class MainActivity : ComponentActivity() {
                 } else {
                     credentialsLoadingState as? Credentials
                 }
+                
+                // Moved SubsonicRepository state here to be driven by actualCredentials
+                var subsonicRepository by remember { mutableStateOf<SubsonicRepository?>(null) }
+
+                // ExoPlayer instance
+                val exoPlayer = remember {
+                    ExoPlayer.Builder(context).build()
+                }
+
+                DisposableEffect(exoPlayer) {
+                    onDispose {
+                        exoPlayer.release()
+                    }
+                }
 
                 // PredictiveBackHandler for folder navigation
                 if (folderHistory.isNotEmpty() && !showSettingsDialog && actualCredentials != null) {
@@ -108,7 +127,6 @@ class MainActivity : ComponentActivity() {
                             progress.collect { event ->
                                 currentBackEvent = event
                             }
-                            // Back gesture committed
                             val previousFolder = folderHistory.last()
                             currentFolderId = previousFolder.first
                             folderHistory = folderHistory.dropLast(1)
@@ -132,52 +150,56 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(actualCredentials) {
                     if (actualCredentials != null) {
+                        // Re-initialize or update SubsonicRepository if credentials change or it's not set
                         if (subsonicRepository?.matchesCredentials(actualCredentials) != true || subsonicRepository == null) {
                             subsonicRepository = SubsonicRepository(
                                 baseUrl = actualCredentials.baseUrl,
                                 username = actualCredentials.username,
                                 password = actualCredentials.password
                             )
-                            currentFolderId = "al-1" 
-                            currentFolderName = "" 
+                            // Reset folder state when repository changes
+                            currentFolderId = "al-1"
+                            currentFolderName = ""
                             folderHistory = emptyList()
                             folderEntries = emptyList()
                             folderLoadingState = LoadingState.IDLE
                         }
                     } else {
                         if (subsonicRepository != null) {
-                            subsonicRepository = null
+                            subsonicRepository = null // Clear repository if credentials are null
+                            // Clear folder state
                             folderEntries = emptyList()
                             folderLoadingState = LoadingState.IDLE
-                            currentFolderId = null 
+                            currentFolderId = null
                             currentFolderName = ""
                             folderHistory = emptyList()
+                            exoPlayer.stop() // Stop playback if user logs out
                         }
                     }
                 }
 
                 LaunchedEffect(subsonicRepository, currentFolderId) { 
                     if (subsonicRepository != null && currentFolderId != null && folderLoadingState == LoadingState.IDLE) {
-                        val folderIdToLoad = currentFolderId // Capture non-null value
+                        val folderIdToLoad = currentFolderId
                         
                         folderLoadingState = LoadingState.LOADING
                         folderLoadError = null
                         try {
                             val result = withContext(Dispatchers.IO) {
-                                withTimeoutOrNull(20000L) { // 20 seconds timeout
-                                    val folderResult = subsonicRepository!!.getFolderContents(folderIdToLoad) // Use captured value
-                                    folderResult // Return the result
+                                withTimeoutOrNull(20000L) { 
+                                    val folderResult = subsonicRepository!!.getFolderContents(folderIdToLoad)
+                                    folderResult
                                 }
                             }
 
-                            if (result == null) { // Timeout occurred
+                            if (result == null) { 
                                 if (isActive) {
                                     val errorMsg = "Error: Folder loading timed out for folderId: $folderIdToLoad."
                                     folderLoadError = errorMsg
                                     folderLoadingState = LoadingState.ERROR
                                     Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
                                 }
-                            } else { // Successful load
+                            } else { 
                                 if (isActive) {
                                     folderEntries = result.entries
                                     currentFolderName = result.name
@@ -193,7 +215,7 @@ class MainActivity : ComponentActivity() {
                             } else {
                                 val errorMsg = "API Error (coroutine inactive): ${e.message} (Code: ${e.code ?: "N/A"}) for folderId: $folderIdToLoad"
                                 folderLoadError = errorMsg
-                                folderLoadingState = LoadingState.ERROR
+                                // folderLoadingState = LoadingState.ERROR // State might be updated by a new load
                                 Toast.makeText(context, "Folder load failed (coroutine became inactive).", Toast.LENGTH_LONG).show()                                
                             }
                         } catch (e: Exception) {
@@ -203,9 +225,9 @@ class MainActivity : ComponentActivity() {
                                 folderLoadingState = LoadingState.ERROR
                                 Toast.makeText(context, folderLoadError, Toast.LENGTH_LONG).show()
                             } else {
-                                val errorMsg = "Generic error (coroutine inactive): ${e.message} for folderId: $folderIdToLoad"
+                                 val errorMsg = "Generic error (coroutine inactive): ${e.message} for folderId: $folderIdToLoad"
                                 folderLoadError = errorMsg
-                                folderLoadingState = LoadingState.ERROR
+                                // folderLoadingState = LoadingState.ERROR  // State might be updated by a new load
                                 Toast.makeText(context, "Folder load failed (coroutine became inactive).", Toast.LENGTH_LONG).show()
                             }
                         }
@@ -220,8 +242,6 @@ class MainActivity : ComponentActivity() {
                             navigationIcon = {
                                 if (folderHistory.isNotEmpty()) {
                                     IconButton(onClick = {
-                                        // Trigger predictive back programmatically (if needed, or rely on system)
-                                        // For now, this button might feel redundant if gesture is primary
                                         val previousFolder = folderHistory.last()
                                         currentFolderId = previousFolder.first
                                         folderHistory = folderHistory.dropLast(1)
@@ -297,7 +317,6 @@ class MainActivity : ComponentActivity() {
                                                     BackEventCompat.EDGE_RIGHT -> progress * -size.width * 0.2f
                                                     else -> 0f
                                                 }
-                                                // Reset translation if progress is minimal to avoid jitter
                                                 if (progress < 0.01f) {
                                                     translationX = 0f
                                                 }
@@ -312,7 +331,22 @@ class MainActivity : ComponentActivity() {
                                             folderLoadingState = LoadingState.IDLE
                                         },
                                         onFileClick = { file ->
-                                            // Play music
+                                            actualCredentials?.let { creds ->
+                                                // Construct download URL
+                                                // TODO: Consider moving URL construction to SubsonicRepository
+                                                // Standard Subsonic API parameters: u, p, v, c, id
+                                                // v = API version (e.g., 1.16.1)
+                                                // c = client identifier (e.g., "PureSWR")
+                                                val downloadUrl = "${creds.baseUrl}/rest/download?u=${creds.username}&p=${creds.password}&v=1.16.1&c=PureSWR&id=${file.id}"
+                                                val mediaItem = MediaItem.fromUri(Uri.parse(downloadUrl))
+                                                
+                                                exoPlayer.setMediaItem(mediaItem)
+                                                exoPlayer.prepare()
+                                                exoPlayer.playWhenReady = true // Start playback when ready
+                                                Toast.makeText(context, "Playing: ${file.name}", Toast.LENGTH_SHORT).show()
+                                            } ?: run {
+                                                Toast.makeText(context, "Error: Credentials not available.", Toast.LENGTH_SHORT).show()
+                                            }
                                         }
                                     )
                                 }
@@ -357,7 +391,12 @@ class MainActivity : ComponentActivity() {
 }
 
 fun SubsonicRepository.matchesCredentials(creds: Credentials): Boolean {
-    return this.baseUrl == creds.baseUrl && this.username == creds.username
+    // Ensure baseUrl, username are accessible from the SubsonicRepository instance
+    // This assumes they are public properties or have getters.
+    // If SubsonicRepository's constructor parameters are private, this method needs to be part of the class
+    // or you need another way to access these details for comparison.
+    // For now, assuming they are accessible as shown in the original code structure.
+    return this.baseUrl == creds.baseUrl && this.username == creds.username // Assuming password match is not needed here
 }
 
 @Preview(showBackground = true)
