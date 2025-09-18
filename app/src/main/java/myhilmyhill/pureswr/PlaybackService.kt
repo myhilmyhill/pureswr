@@ -7,10 +7,12 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
 import androidx.media3.common.Player // Ensure Player is imported for command constants
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
@@ -20,11 +22,16 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
 // App's R class for app-specific resources like ic_launcher_foreground
-import myhilmyhill.pureswr.R
+import myhilmyhill.pureswr.R // この行が重複している場合は削除してください
 import com.google.common.collect.ImmutableList
 
 private const val PLAYER_CHANNEL_ID = "pureswr_player_channel"
 private const val PLAYER_NOTIFICATION_ID = 1
+
+// PlaybackService.kt (またはアクセス可能な場所)
+private fun extractFolderIdFromMediaItem(mediaItem: MediaItem?): String? {
+    return mediaItem?.mediaMetadata?.extras?.getString("folderId")
+}
 
 class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
@@ -76,6 +83,25 @@ class PlaybackService : MediaSessionService() {
                     .setShowCancelButton(true)
                     .setCancelButtonIntent(actionFactory.createMediaActionPendingIntent(mediaSession, Player.COMMAND_STOP.toLong()))
 
+                // PendingIntent to launch MainActivity when the notification is tapped
+                val contentIntent = Intent(this@PlaybackService, MainActivity::class.java).apply {
+                    val currentMediaItem = mediaSession.player.currentMediaItem
+                    if (currentMediaItem != null) {
+                        val folderId = extractFolderIdFromMediaItem(currentMediaItem)
+                        if (folderId != null) {
+                            putExtra("folderId", folderId)
+                        }
+                        // putExtra("songId", currentMediaItem.mediaId) // 必要であればsongIdも渡す
+                    }
+                    flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                }
+                val pendingContentIntent = PendingIntent.getActivity(
+                    this@PlaybackService,
+                    0,
+                    contentIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+
                 notificationBuilder
                     .setContentTitle(mediaSession.player.currentMediaItem?.mediaMetadata?.title ?: "Unknown Title")
                     .setContentText(mediaSession.player.currentMediaItem?.mediaMetadata?.artist ?: "Unknown Artist")
@@ -83,6 +109,7 @@ class PlaybackService : MediaSessionService() {
                     .setSmallIcon(myhilmyhill.pureswr.R.drawable.ic_launcher_foreground)
                     .setOngoing(mediaSession.player.isPlaying)
                     .setStyle(mediaStyle)
+                    .setContentIntent(pendingContentIntent)
 
                 for (button in customLayout) {
                     notificationBuilder.addAction(actionFactory.createCustomActionFromCustomCommandButton(mediaSession, button))
