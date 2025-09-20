@@ -68,11 +68,9 @@ class MainActivity : ComponentActivity() {
         userPreferencesRepository = UserPreferencesRepository(this)
 
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = notificationManager.getNotificationChannel("pureswr_player_channel")
-            if (channel == null) {
-                // Channel might be created by PlaybackService
-            }
+        val channel = notificationManager.getNotificationChannel("pureswr_player_channel")
+        if (channel == null) {
+            // Channel might be created by PlaybackService
         }
 
         setContent {
@@ -397,29 +395,57 @@ class MainActivity : ComponentActivity() {
                                                 Toast.makeText(this@MainActivity, "Clicked item is not a folder.", Toast.LENGTH_SHORT).show()
                                             }
                                         },
-                                        onFileClick = { file ->
+                                        onFileClick = { file -> // Entry object
                                             actualCredentials?.let { creds ->
-                                                if (file !is FolderEntry) {
-                                                    val downloadUrl = "${creds.baseUrl}/rest/download?u=${creds.username}&p=${creds.password}&v=1.16.1&c=PureSWR&id=${file.id}"
-                                                    val extrasBundle = Bundle().apply {
-                                                        putString("folderId", currentFolderId)
-                                                    }
-                                                    val mediaMetadata = MediaMetadata.Builder()
-                                                        .setTitle(file.name)
-                                                        .setExtras(extrasBundle)
-                                                        .build()
-                                                    val mediaItem = MediaItem.Builder()
-                                                        .setUri(Uri.parse(downloadUrl))
-                                                        .setMediaId(file.id)
-                                                        .setMediaMetadata(mediaMetadata)
-                                                        .build()
+                                                val currentSubsonicRepository = subsonicRepository
+                                                if (file !is FolderEntry && currentSubsonicRepository != null) {
+                                                    scope.launch {
+                                                        var songDurationMs: Long? = null
+                                                        var songTitle: String = file.name
 
-                                                    mediaController?.setMediaItem(mediaItem)
-                                                    mediaController?.prepare()
-                                                    mediaController?.play()
-                                                    Toast.makeText(this@MainActivity, "Playing: ${file.name}", Toast.LENGTH_SHORT).show()
-                                                } else {
+                                                        try {
+                                                            // Fetch song details in a background thread
+                                                            val songDetails = withContext(Dispatchers.IO) {
+                                                                currentSubsonicRepository.getSongDetails(file.id)
+                                                            }
+                                                            songDurationMs = songDetails.duration?.toLong()?.times(1000)
+                                                            println("MainActivity: Fetched song details for ${file.id} - Title: $songTitle, Duration: $songDurationMs ms")
+                                                        } catch (e: Exception) {
+                                                            // Log error and optionally inform user, but proceed with playback if possible
+                                                            println("MainActivity: Error fetching song details for ${file.id}: ${e.message}")
+                                                            withContext(Dispatchers.Main) {
+                                                                Toast.makeText(this@MainActivity, "Could not fetch song details. Proceeding without.", Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        }
+
+                                                        val downloadUrl = "${creds.baseUrl}/rest/download?u=${creds.username}&p=${creds.password}&v=1.16.1&c=PureSWR&id=${file.id}"
+                                                        val extrasBundle = Bundle().apply {
+                                                            putString("folderId", currentFolderId) // currentFolderId from MainActivity's state
+                                                            songDurationMs?.let { putLong("duration_ms", it) }
+                                                        }
+                                                        val mediaMetadataBuilder = MediaMetadata.Builder()
+                                                            .setTitle(songTitle)
+                                                            .setArtist("")
+                                                            .setExtras(extrasBundle)
+
+                                                        val mediaItem = MediaItem.Builder()
+                                                            .setUri(Uri.parse(downloadUrl))
+                                                            .setMediaId(file.id)
+                                                            .setMediaMetadata(mediaMetadataBuilder.build())
+                                                            .build()
+
+                                                        // Ensure media controller operations are on the main thread if they interact with UI or certain Media3 components directly
+                                                        withContext(Dispatchers.Main) {
+                                                            mediaController?.setMediaItem(mediaItem)
+                                                            mediaController?.prepare()
+                                                            mediaController?.play()
+                                                            Toast.makeText(this@MainActivity, "Playing: $songTitle", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    }
+                                                } else if (file is FolderEntry) {
                                                     Toast.makeText(this@MainActivity, "Clicked item is a folder, not a playable file.", Toast.LENGTH_SHORT).show()
+                                                } else if (currentSubsonicRepository == null){
+                                                     Toast.makeText(this@MainActivity, "Error: Subsonic repository not available.", Toast.LENGTH_SHORT).show()
                                                 }
                                             } ?: run {
                                                 Toast.makeText(this@MainActivity, "Error: Credentials not available.", Toast.LENGTH_SHORT).show()
@@ -492,6 +518,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// Helper extension function, can be kept or removed if not widely used
 fun SubsonicRepository.matchesCredentials(creds: Credentials): Boolean {
     return this.baseUrl == creds.baseUrl && this.username == creds.username 
 }
