@@ -32,10 +32,6 @@ private const val PLAYER_CHANNEL_ID = "pureswr_player_channel"
 private const val PLAYER_NOTIFICATION_ID = 1
 private const val TAG = "PlaybackServiceDebug" // Logcat用タグ
 
-private fun extractFolderIdFromMediaItem(mediaItem: MediaItem?): String? {
-    return mediaItem?.mediaMetadata?.extras?.getString("folderId")
-}
-
 class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer // ExoPlayerをクラスメンバーにする
@@ -159,12 +155,9 @@ class PlaybackService : MediaSessionService() {
                     .setCancelButtonIntent(actionFactory.createMediaActionPendingIntent(mediaSession, Player.COMMAND_STOP.toLong()))
 
                 val contentIntent = Intent(this@PlaybackService, MainActivity::class.java).apply {
-                    val currentMediaItem = mediaSession.player.currentMediaItem
-                    if (currentMediaItem != null) {
-                        val folderId = extractFolderIdFromMediaItem(currentMediaItem)
-                        if (folderId != null) {
-                            putExtra("folderId", folderId)
-                        }
+                    val currentMediaItemExtras = mediaSession.player.currentMediaItem?.mediaMetadata?.extras
+                    if (currentMediaItemExtras != null) {
+                        putExtra("folderId", currentMediaItemExtras.getString("folderId"))
                     }
                     flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                 }

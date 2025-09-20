@@ -6,7 +6,7 @@ import io.ktor.client.call.* // body
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.contentnegotiation.* // ContentNegotiation
-import io.ktor.client.request.* // get, parameter
+import io.ktor.client.request.* // get, parameter, HttpRequestBuilder
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.* // appendPathSegments
@@ -19,7 +19,6 @@ import io.ktor.client.plugins.HttpTimeout
 
 class SubsonicApiException(message: String, val code: Int? = null) : Exception(message)
 
-// Domain Model Entry (unchanged)
 @Serializable
 sealed interface Entry {
     val id: String
@@ -30,24 +29,26 @@ sealed interface Entry {
 data class FolderEntry(
     override val id: String,
     override val name: String,
-    val entries: List<Entry>
+    val entries: List<Entry>,
+    val parentFolderId: String? = null // ★ parentFolderId を追加
 ) : Entry
 
 @Serializable
 data class MusicEntry(
     override val id: String,
     override val name: String
+    // parentFolderId は MusicEntry には通常不要
 ) : Entry
 
-// Subsonic API DTOs
+// Subsonic API DTOs (変更なし)
 @Serializable
-private data class SubsonicResponse( // Used by getMusicFolders, getMusicDirectory
+private data class SubsonicResponse(
     @SerialName("subsonic-response")
     val subsonicResponse: SubsonicResponseContent? = null
 )
 
 @Serializable
-private data class SubsonicResponseContent( // Used by getMusicFolders, getMusicDirectory
+private data class SubsonicResponseContent(
     val status: String,
     val version: String? = null,
     val directory: SubsonicDirectory? = null,
@@ -62,22 +63,24 @@ private data class SubsonicMusicFolders(
 )
 
 @Serializable
-data class SubsonicMusicFolderEntry(
+data class SubsonicMusicFolderEntry( // This DTO is for top-level music folders from getMusicFolders.view
     val id: String,
     val name: String? = null
+    // It does not have a 'parent' field from Subsonic, we infer it.
 )
 
 @Serializable
-private data class SubsonicDirectory(
-    val id: String? = null,
-    val name: String? = null,
-    val child: List<SubsonicChildEntry>? = null
+private data class SubsonicDirectory( // This DTO is for a specific directory from getMusicDirectory.view
+    val id: String? = null, // The ID of this directory
+    val name: String? = null, // The name of this directory
+    val parent: String? = null, // The ID of the parent directory
+    val child: List<SubsonicChildEntry>? = null // Children of this directory
 )
 
 @Serializable
-private data class SubsonicChildEntry(
+private data class SubsonicChildEntry( // This DTO is for an entry within a SubsonicDirectory
     val id: String,
-    val parent: String? = null,
+    val parent: String? = null, // ID of the directory containing this child entry
     val isDir: Boolean,
     val title: String? = null,
     val name: String? = null,
@@ -92,7 +95,7 @@ private data class SubsonicError(
     val message: String
 )
 
-// DTOs for getSong.view
+// DTOs for getSong.view (変更なし)
 @Serializable
 data class SubsonicApiSong(
     val id: String,
@@ -107,15 +110,15 @@ data class SubsonicApiSong(
     val size: Long? = null,
     val contentType: String? = null,
     val suffix: String? = null,
-    val duration: Int? = null, // Duration in seconds
+    val duration: Int? = null,
     val bitRate: Int? = null,
     val path: String? = null,
     val playCount: Long? = null,
     val discNumber: Int? = null,
-    val created: String? = null, // Timestamp
+    val created: String? = null,
     val albumId: String? = null,
     val artistId: String? = null,
-    val type: String? = null // e.g., "music"
+    val type: String? = null
 )
 
 @Serializable
@@ -132,7 +135,6 @@ private data class SubsonicGetSongResponse(
     val response: SubsonicSongPayload? = null
 )
 
-
 class SubsonicRepository(
     internal val baseUrl: String,
     internal val username: String,
@@ -143,7 +145,7 @@ class SubsonicRepository(
         const val SYNTHETIC_ROOT_ID = "__SUBSONIC_ROOT__"
         const val SYNTHETIC_ROOT_NAME = "Subsonic Library"
     }
-    private val apiVersion = "1.16.1" // Or your target Subsonic API version
+    private val apiVersion = "1.16.1"
     private val restPath = "rest"
     private val clientName: String = "PureSWR"
 
@@ -154,19 +156,42 @@ class SubsonicRepository(
 
     private val strictJsonParser = Json {
         ignoreUnknownKeys = true
-        isLenient = false // For parsing error responses more strictly
+        isLenient = false
+    }
+
+    private fun HttpRequestBuilder.commonParameters() {
+        url.parameters.apply {
+            append("u", username)
+            append("p", this@SubsonicRepository.password)
+            append("v", apiVersion)
+            append("c", clientName)
+            append("f", "json")
+        }
     }
 
     private val client: HttpClient by lazy {
         httpClientOverride ?: HttpClient(CIO) {
             install(ContentNegotiation) {
-                json(lenientJsonParser) // Default to lenient for primary parsing
+                json(lenientJsonParser)
             }
             install(HttpTimeout) {
-                requestTimeoutMillis = 30000 // 30 seconds
-                connectTimeoutMillis = 10000 // 10 seconds
-                socketTimeoutMillis = 10000 // 10 seconds
+                requestTimeoutMillis = 30000
+                connectTimeoutMillis = 10000
+                socketTimeoutMillis = 10000
             }
+        }
+    }
+
+    private suspend fun performHttpRequest(
+        endpoint: String,
+        requestSetup: HttpRequestBuilder.() -> Unit = {}
+    ): HttpResponse {
+        return client.get(baseUrl) {
+            url {
+                appendPathSegments(endpoint)
+            }
+            commonParameters()
+            requestSetup()
         }
     }
 
@@ -178,26 +203,14 @@ class SubsonicRepository(
         var responseText: String? = null
 
         try {
-            val localHttpResponse = client.get(baseUrl) {
-                url {
-                    appendPathSegments(endpoint)
-                    parameters.append("u", username)
-                    parameters.append("p", this@SubsonicRepository.password)
-                    parameters.append("v", apiVersion)
-                    parameters.append("c", clientName)
-                    parameters.append("f", "json")
-                    if (!isRequestingRoot) {
-                        parameters.append("id", folderId!!)
-                    }
+            httpResponse = performHttpRequest(endpoint) {
+                if (!isRequestingRoot) {
+                    url.parameters.append("id", folderId!!)
                 }
             }
-            httpResponse = localHttpResponse
             
-            val localResponseText = localHttpResponse.bodyAsText()
-            responseText = localResponseText
-            
-            // Use lenientJsonParser for initial parsing
-            val responseBody: SubsonicResponse = lenientJsonParser.decodeFromString(localResponseText)
+            responseText = httpResponse.bodyAsText()
+            val responseBody: SubsonicResponse = lenientJsonParser.decodeFromString(responseText)
 
             if (responseBody.subsonicResponse?.status == "ok") {
                 if (isRequestingRoot) {
@@ -205,50 +218,59 @@ class SubsonicRepository(
                         FolderEntry(
                             id = dto.id,
                             name = dto.name ?: "Unnamed Folder",
-                            entries = emptyList()
+                            entries = emptyList(),
+                            parentFolderId = null
                         )
                     } ?: emptyList()
                     return FolderEntry(
                         id = SYNTHETIC_ROOT_ID,
                         name = SYNTHETIC_ROOT_NAME,
-                        entries = musicFolderEntries
+                        entries = musicFolderEntries,
+                        parentFolderId = null // ★ Synthetic root has no parent
                     )
-                } else {
+                } else { // Requesting a specific directory
                     val directoryNode = responseBody.subsonicResponse.directory
                     if (directoryNode?.id != null && directoryNode.name != null) {
                         val entries = directoryNode.child?.mapNotNull { subsonicChild ->
                             val entryName = subsonicChild.name ?: subsonicChild.title ?: "Unknown Entry"
                             if (subsonicChild.isDir) {
-                                FolderEntry(id = subsonicChild.id, name = entryName, entries = emptyList())
+                                FolderEntry(
+                                    id = subsonicChild.id,
+                                    name = entryName,
+                                    entries = emptyList(),
+                                    parentFolderId = if (subsonicChild.parent == "-1") null else subsonicChild.parent
+                                )
                             } else {
                                 MusicEntry(id = subsonicChild.id, name = entryName)
                             }
                         } ?: emptyList()
-                        return FolderEntry(id = directoryNode.id, name = directoryNode.name, entries = entries)
+                        return FolderEntry(
+                            id = directoryNode.id,
+                            name = directoryNode.name,
+                            entries = entries,
+                            parentFolderId = if (directoryNode.parent == "-1") null else directoryNode.parent
+                        )
                     } else {
-                        throw SubsonicApiException("Incomplete directory data for folderId '$folderId': ID or Name from server is null. Raw response: '$localResponseText'")
+                        throw SubsonicApiException("Incomplete directory data for folderId '$folderId': ID or Name from server is null. Raw response: '$responseText'")
                     }
                 }
             } else {
                 val error = responseBody.subsonicResponse?.error
                 val errorMessage = error?.message ?: "Subsonic API reported failure (no specific error message in parsed response)"
                 val errorCode = error?.code
-                throw SubsonicApiException("$errorMessage. Raw response: '$localResponseText'", errorCode)
+                throw SubsonicApiException("$errorMessage. Raw response: '$responseText'", errorCode)
             }
         } catch (e: SubsonicApiException) {
             throw e 
         } catch (e: ClientRequestException) { 
             val errorResponseText = e.response.bodyAsText()
             try {
-                // Try parsing with strict parser for error structure
                 val errorBody: SubsonicResponse = strictJsonParser.decodeFromString(errorResponseText)
                 errorBody.subsonicResponse?.error?.let {
                     throw SubsonicApiException(it.message, it.code)
                 }
-                // Fallback if parsing errorBody or its structure is not as expected
                 throw SubsonicApiException("HTTP Error ${e.response.status.value}: ${e.message}. Raw error body: '$errorResponseText'", e.response.status.value)
             } catch (parseEx: Exception) { 
-                // If parsing the error response itself fails
                 throw SubsonicApiException("HTTP Error ${e.response.status.value}: ${e.message}. Failed to parse error response body: '$errorResponseText'. Parse Error: ${parseEx.message}", e.response.status.value)
             }
         } catch (e: SerializationException) { 
@@ -272,20 +294,11 @@ class SubsonicRepository(
         var responseText: String? = null
 
         try {
-            val localHttpResponse = client.get(baseUrl) {
-                url {
-                    appendPathSegments(endpoint)
-                    parameters.append("id", songId)
-                    parameters.append("u", username)
-                    parameters.append("p", this@SubsonicRepository.password)
-                    parameters.append("v", apiVersion)
-                    parameters.append("c", clientName)
-                    parameters.append("f", "json")
-                }
+            httpResponse = performHttpRequest(endpoint) {
+                url.parameters.append("id", songId)
             }
-            httpResponse = localHttpResponse
-            responseText = localHttpResponse.bodyAsText()
-
+            
+            responseText = httpResponse.bodyAsText()
             val responseBody: SubsonicGetSongResponse = lenientJsonParser.decodeFromString(responseText)
 
             if (responseBody.response?.status == "ok") {
@@ -301,7 +314,7 @@ class SubsonicRepository(
         } catch (e: ClientRequestException) {
             val errorResponseText = e.response.bodyAsText()
             try {
-                val errorBody: SubsonicGetSongResponse = strictJsonParser.decodeFromString(errorResponseText) // Attempt to parse with specific error DTO
+                val errorBody: SubsonicGetSongResponse = strictJsonParser.decodeFromString(errorResponseText) 
                 errorBody.response?.error?.let {
                     throw SubsonicApiException(it.message, it.code)
                 }
@@ -325,7 +338,7 @@ class SubsonicRepository(
     }
 
     fun close() {
-        if (httpClientOverride == null) { // Only close if this class created the client
+        if (httpClientOverride == null) { 
             client.close()
         }
     }

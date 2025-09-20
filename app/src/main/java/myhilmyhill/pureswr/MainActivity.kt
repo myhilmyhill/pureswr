@@ -30,8 +30,10 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -60,6 +62,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var userPreferencesRepository: UserPreferencesRepository
     private var mediaController: MediaController? = null
+    private var playerListener: Player.Listener? = null // Store the listener
     private var currentActivityIntent by mutableStateOf<Intent?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,8 +82,10 @@ class MainActivity : ComponentActivity() {
 
                 var currentFolderId by remember { mutableStateOf<String?>(currentActivityIntent?.getStringExtra("folderId") ?: "al-1") }
                 var currentFolderName by remember { mutableStateOf("") }
+                var currentPlayingTrackId by remember { mutableStateOf("") }
+                var isMusicPlaying by remember { mutableStateOf(false) } // New state for playback status
                 var folderEntries by remember { mutableStateOf<List<Entry>>(emptyList()) }
-                var folderHistory by remember { mutableStateOf<List<Pair<String?, String>>>(emptyList()) }
+                var parentFolderId by remember { mutableStateOf<String?>(null) }
                 var folderLoadingState by remember { mutableStateOf(LoadingState.IDLE) }
                 var folderLoadError by remember { mutableStateOf<String?>(null) }
 
@@ -98,6 +103,36 @@ class MainActivity : ComponentActivity() {
 
                 var subsonicRepository by remember { mutableStateOf<SubsonicRepository?>(null) }
 
+                // Listener for MediaController events
+                DisposableEffect(mediaController) {
+                    val listener = object : Player.Listener {
+                        override fun onIsPlayingChanged(isPlaying: Boolean) {
+                            isMusicPlaying = isPlaying
+                            println("MainActivityPlayerDebug: onIsPlayingChanged: $isPlaying")
+                        }
+
+                        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                            currentPlayingTrackId = mediaItem?.mediaId ?: ""
+                            isMusicPlaying = mediaController?.isPlaying ?: false
+                             println("MainActivityPlayerDebug: onMediaItemTransition. New Media ID: ${mediaItem?.mediaId}, Reason: $reason, isPlaying: $isMusicPlaying")
+                        }
+                    }
+                    playerListener = listener
+                    mediaController?.addListener(listener)
+                    // Set initial state when controller is (re)connected
+                    currentPlayingTrackId = mediaController?.currentMediaItem?.mediaId ?: ""
+                    isMusicPlaying = mediaController?.isPlaying ?: false
+                    println("MainActivityPlayerDebug: MediaController DisposableEffect - Listener added. Initial Track ID: $currentPlayingTrackId, IsPlaying: $isMusicPlaying")
+
+
+                    onDispose {
+                        mediaController?.removeListener(listener)
+                        playerListener = null
+                        println("MainActivityPlayerDebug: MediaController DisposableEffect - Listener removed.")
+                    }
+                }
+
+
                 LaunchedEffect(currentActivityIntent) {
                     val intentToProcess = currentActivityIntent // ローカルコピーを使用
                     val newFolderIdFromIntent = intentToProcess?.getStringExtra("folderId")
@@ -106,7 +141,6 @@ class MainActivity : ComponentActivity() {
                     if (newFolderIdFromIntent != null && newFolderIdFromIntent != currentFolderId) {
                         println("MainActivityFolderDebug: Intent changed. New folderId: $newFolderIdFromIntent. Current (old): $currentFolderId")
                         currentFolderId = newFolderIdFromIntent
-                        folderHistory = emptyList()
                         folderLoadingState = LoadingState.IDLE
                         println("MainActivityFolderDebug: State set to IDLE due to intent change. New Folder ID: $currentFolderId. History Cleared.")
                     } else if (newFolderIdFromIntent != null && newFolderIdFromIntent == currentFolderId) {
@@ -126,13 +160,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (folderHistory.isNotEmpty() && !showSettingsDialog && actualCredentials != null) {
+                if (parentFolderId != null && !showSettingsDialog && actualCredentials != null) {
                     PredictiveBackHandler(enabled = true) { progress: Flow<BackEventCompat> ->
                         try {
                             progress.collect { event -> currentBackEvent = event }
-                            val previousFolder = folderHistory.last()
-                            currentFolderId = previousFolder.first
-                            folderHistory = folderHistory.dropLast(1)
+                            currentFolderId = parentFolderId
                             folderLoadingState = LoadingState.IDLE
                             println("MainActivityFolderDebug: State changed to IDLE (PredictiveBack). New Folder ID: $currentFolderId")
                         } catch (e: CancellationException) {
@@ -164,7 +196,7 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(actualCredentials) {
-                    val currentRepo = subsonicRepository 
+                    val currentRepo = subsonicRepository
                     if (actualCredentials != null) {
                         val credentialsChanged = currentRepo == null ||
                                                  currentRepo.baseUrl != actualCredentials.baseUrl ||
@@ -184,10 +216,8 @@ class MainActivity : ComponentActivity() {
                                 // Keep al-1 if it was the default and no new intent folderId
                             } else if (intentFolderId != null) {
                                 currentFolderId = intentFolderId
-                                folderHistory = emptyList() // Ensure history is cleared if intent changes folder
                             } else {
-                                currentFolderId = "al-1" // Default if no specific folder from intent
-                                folderHistory = emptyList()
+                                currentFolderId = "al-1"
                             }
                             currentFolderName = ""
                             folderEntries = emptyList()
@@ -196,7 +226,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             println("MainActivityFolderDebug: Credentials match existing SubsonicRepository. Instance: ${System.identityHashCode(currentRepo)}. Credentials hash: ${actualCredentials.hashCode()}")
                         }
-                    } else { 
+                    } else {
                         if (currentRepo != null) {
                             println("MainActivityFolderDebug: Clearing SubsonicRepository. Old instance: ${System.identityHashCode(currentRepo)}")
                             subsonicRepository = null
@@ -204,7 +234,9 @@ class MainActivity : ComponentActivity() {
                             folderLoadingState = LoadingState.IDLE
                             currentFolderId = null
                             currentFolderName = ""
-                            folderHistory = emptyList()
+                            currentPlayingTrackId = ""
+                            isMusicPlaying = false
+                            parentFolderId = null
                             mediaController?.stop()
                             mediaController?.clearMediaItems()
                             println("MainActivityFolderDebug: State set to IDLE due to credentials cleared.")
@@ -223,20 +255,20 @@ class MainActivity : ComponentActivity() {
                         try {
                             println("MainActivityFolderDebug: Calling getFolderContents for ID: $folderIdToLoad, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
                             val result = withContext(Dispatchers.IO) {
-                                withTimeoutOrNull(60000L) { 
+                                withTimeoutOrNull(60000L) {
                                     repositoryAtLaunch.getFolderContents(folderIdToLoad!!)
                                 }
                             }
-                            if (subsonicRepository !== repositoryAtLaunch) { 
+                            if (subsonicRepository !== repositoryAtLaunch) {
                                  println("MainActivityFolderDebug: Repo instance changed (ref check) during load for $folderIdToLoad! Original: ${System.identityHashCode(repositoryAtLaunch)}, Current Global: ${System.identityHashCode(subsonicRepository)}. Current folderLoadingState: $folderLoadingState.")
-                                 if (folderLoadingState == LoadingState.LOADING) { 
+                                 if (folderLoadingState == LoadingState.LOADING) {
                                     println("MainActivityFolderDebug: Repo changed and current coroutine was still LOADING. Discarding result from old repo for $folderIdToLoad.")
                                  } else {
                                      println("MainActivityFolderDebug: Repo changed, but current folderLoadingState is $folderLoadingState (not LOADING). This coroutine for $folderIdToLoad will not update state from potentially stale data.")
                                  }
-                                 return@LaunchedEffect 
+                                 return@LaunchedEffect
                             }
-                            if (result == null) { 
+                            if (result == null) {
                                 val errorMsg = "Error: Folder loading timed out for folderId: $folderIdToLoad."
                                 println("MainActivityFolderDebug: Timeout. ID: $folderIdToLoad, Error: $errorMsg. isActive: $isActive, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
                                 folderLoadError = errorMsg
@@ -245,11 +277,13 @@ class MainActivity : ComponentActivity() {
                                 if (isActive) {
                                     Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
                                 }
-                            } else { 
+                            } else {
                                 if (isActive) {
                                     println("MainActivityFolderDebug: Success loading folder. ID: $folderIdToLoad, Result Name: ${result.name}, Entry count: ${result.entries.size}, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
+                                    println("parentFolderId: ${result.parentFolderId}")
                                     folderEntries = result.entries
                                     currentFolderName = result.name
+                                    parentFolderId = result.parentFolderId
                                     folderLoadingState = LoadingState.SUCCESS
                                     println("MainActivityFolderDebug: State changed to SUCCESS. ID: $folderIdToLoad, Entries set: ${folderEntries.size}")
                                 } else {
@@ -260,7 +294,7 @@ class MainActivity : ComponentActivity() {
                             println("MainActivityFolderDebug: Coroutine for $folderIdToLoad (RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}) cancelled. Current global repo: ${System.identityHashCode(subsonicRepository)}. State: $folderLoadingState. Exception: $e")
                             throw e
                         } catch (e: SubsonicApiException) {
-                            if (subsonicRepository !== repositoryAtLaunch && folderLoadingState != LoadingState.LOADING) { 
+                            if (subsonicRepository !== repositoryAtLaunch && folderLoadingState != LoadingState.LOADING) {
                                  println("MainActivityFolderDebug: SubsonicApiException for $folderIdToLoad (RepoLaunch: ${System.identityHashCode(repositoryAtLaunch)}), but repo changed (ref check) and state is $folderLoadingState. Not setting ERROR from this stale coroutine.")
                                  return@LaunchedEffect
                             }
@@ -273,7 +307,7 @@ class MainActivity : ComponentActivity() {
                                 Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
                             }
                         } catch (e: Exception) {
-                            if (subsonicRepository !== repositoryAtLaunch && folderLoadingState != LoadingState.LOADING) { 
+                            if (subsonicRepository !== repositoryAtLaunch && folderLoadingState != LoadingState.LOADING) {
                                  println("MainActivityFolderDebug: Generic Exception for $folderIdToLoad (RepoLaunch: ${System.identityHashCode(repositoryAtLaunch)}), but repo changed (ref check) and state is $folderLoadingState. Not setting ERROR from this stale coroutine.")
                                  return@LaunchedEffect
                             }
@@ -289,7 +323,7 @@ class MainActivity : ComponentActivity() {
                     } else {
                         if (subsonicRepository == null || currentFolderId == null) {
                             println("MainActivityFolderDebug: Skipped folder load (Repo or FolderID null). SubsonicRepo: ${subsonicRepository != null}, FolderID: $currentFolderId, State: $folderLoadingState")
-                        } 
+                        }
                     }
                 }
 
@@ -299,11 +333,9 @@ class MainActivity : ComponentActivity() {
                         TopAppBar(
                             title = { Text(currentFolderName.ifEmpty { if (currentFolderId == "al-1" && folderLoadingState != LoadingState.SUCCESS) "Loading Album..." else if (folderLoadingState != LoadingState.SUCCESS) "Loading..." else "Folder" }) },
                             navigationIcon = {
-                                if (folderHistory.isNotEmpty()) {
+                                if (parentFolderId != null) {
                                     IconButton(onClick = {
-                                        val previousFolder = folderHistory.last()
-                                        currentFolderId = previousFolder.first
-                                        folderHistory = folderHistory.dropLast(1)
+                                        currentFolderId = parentFolderId
                                         folderLoadingState = LoadingState.IDLE
                                         println("MainActivityFolderDebug: State changed to IDLE (TopAppBar Back). New Folder ID: $currentFolderId")
                                     }) {
@@ -312,9 +344,9 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             actions = {
-                                IconButton(onClick = { 
+                                IconButton(onClick = {
                                     println("MainActivityFolderDebug: Settings icon clicked. Show settings dialog.")
-                                    showSettingsDialog = true 
+                                    showSettingsDialog = true
                                 }) {
                                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
                                 }
@@ -333,9 +365,9 @@ class MainActivity : ComponentActivity() {
                                 currentBaseUrl = actualCredentials?.baseUrl ?: "",
                                 currentUsername = actualCredentials?.username ?: "",
                                 currentPassword = actualCredentials?.password ?: "",
-                                onDismissRequest = { 
+                                onDismissRequest = {
                                     println("MainActivityFolderDebug: SettingsDialog dismissed.")
-                                    showSettingsDialog = false 
+                                    showSettingsDialog = false
                                 },
                                 onSave = { newCredentials ->
                                     println("MainActivityFolderDebug: SettingsDialog save. New credentials hash: ${newCredentials.hashCode()}")
@@ -348,9 +380,9 @@ class MainActivity : ComponentActivity() {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text("Please configure your Subsonic server.")
                                     Spacer(Modifier.height(8.dp))
-                                    Button(onClick = { 
+                                    Button(onClick = {
                                         println("MainActivityFolderDebug: Open Settings button clicked (actualCredentials null).")
-                                        showSettingsDialog = true 
+                                        showSettingsDialog = true
                                     }) { Text("Open Settings") }
                                 }
                             }
@@ -385,9 +417,10 @@ class MainActivity : ComponentActivity() {
                                     FolderDisplay(
                                         modifier = folderDisplayModifier,
                                         entries = folderEntries,
+                                        currentPlayingTrackId = currentPlayingTrackId,
+                                        isMusicPlaying = isMusicPlaying, // Pass isMusicPlaying state
                                         onFolderClick = { folder ->
                                             if (folder is FolderEntry) {
-                                                folderHistory = folderHistory + (currentFolderId!! to currentFolderName)
                                                 currentFolderId = folder.id
                                                 folderLoadingState = LoadingState.IDLE
                                                 println("MainActivityFolderDebug: State changed to IDLE (onFolderClick). New Folder ID: $currentFolderId")
@@ -399,6 +432,9 @@ class MainActivity : ComponentActivity() {
                                             actualCredentials?.let { creds ->
                                                 val currentSubsonicRepository = subsonicRepository
                                                 if (file !is FolderEntry && currentSubsonicRepository != null) {
+                                                    // Optimistically set, listener will confirm
+                                                    // currentPlayingTrackId = file.id (already done by listener or by clicking the same item)
+                                                    // isMusicPlaying = true (will be set by listener)
                                                     scope.launch {
                                                         var songDurationMs: Long? = null
                                                         var songTitle: String = file.name
@@ -420,7 +456,7 @@ class MainActivity : ComponentActivity() {
 
                                                         val downloadUrl = "${creds.baseUrl}/rest/download?u=${creds.username}&p=${creds.password}&v=1.16.1&c=PureSWR&id=${file.id}"
                                                         val extrasBundle = Bundle().apply {
-                                                            putString("folderId", currentFolderId) // currentFolderId from MainActivity's state
+                                                            putString("folderId", currentFolderId)
                                                             songDurationMs?.let { putLong("duration_ms", it) }
                                                         }
                                                         val mediaMetadataBuilder = MediaMetadata.Builder()
@@ -434,12 +470,21 @@ class MainActivity : ComponentActivity() {
                                                             .setMediaMetadata(mediaMetadataBuilder.build())
                                                             .build()
 
-                                                        // Ensure media controller operations are on the main thread if they interact with UI or certain Media3 components directly
                                                         withContext(Dispatchers.Main) {
-                                                            mediaController?.setMediaItem(mediaItem)
-                                                            mediaController?.prepare()
-                                                            mediaController?.play()
-                                                            Toast.makeText(this@MainActivity, "Playing: $songTitle", Toast.LENGTH_SHORT).show()
+                                                            if (mediaController?.currentMediaItem?.mediaId == file.id) {
+                                                                // If it's the same track, toggle play/pause
+                                                                if (mediaController?.isPlaying == true) {
+                                                                    mediaController?.pause()
+                                                                } else {
+                                                                    mediaController?.play()
+                                                                }
+                                                            } else {
+                                                                // Different track, or no track playing
+                                                                mediaController?.setMediaItem(mediaItem)
+                                                                mediaController?.prepare()
+                                                                mediaController?.play()
+                                                            }
+                                                            // Toast.makeText(this@MainActivity, "Playing: $songTitle", Toast.LENGTH_SHORT).show() // Toast can be annoying on toggle
                                                         }
                                                     }
                                                 } else if (file is FolderEntry) {
@@ -506,21 +551,26 @@ class MainActivity : ComponentActivity() {
         controllerFuture.addListener(
             {
                 mediaController = controllerFuture.get()
+                // Listener is attached via DisposableEffect in setContent now
+                // Initial state update also happens in DisposableEffect
+                 println("MainActivityPlayerDebug: MediaController connected in onStart.")
             },
-            ContextCompat.getMainExecutor(this)
+            MoreExecutors.directExecutor() // Using directExecutor, but Main for UI updates inside listener
         )
     }
 
     override fun onStop() {
         super.onStop()
+        // Listener is removed via DisposableEffect
         mediaController?.release()
         mediaController = null
+        println("MainActivityPlayerDebug: MediaController released in onStop.")
     }
 }
 
 // Helper extension function, can be kept or removed if not widely used
 fun SubsonicRepository.matchesCredentials(creds: Credentials): Boolean {
-    return this.baseUrl == creds.baseUrl && this.username == creds.username 
+    return this.baseUrl == creds.baseUrl && this.username == creds.username
 }
 
 @Preview(showBackground = true)

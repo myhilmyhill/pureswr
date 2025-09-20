@@ -14,6 +14,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Pause // Added import for Pause icon
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,7 +35,9 @@ fun FolderDisplay(
     modifier: Modifier = Modifier,
     entries: List<Entry>,
     onFolderClick: (FolderEntry) -> Unit,
-    onFileClick: (MusicEntry) -> Unit
+    onFileClick: (MusicEntry) -> Unit,
+    currentPlayingTrackId: String,
+    isMusicPlaying: Boolean // New parameter for actual playback state
 ) {
     if (entries.isEmpty()) {
         Box(
@@ -55,7 +59,12 @@ fun FolderDisplay(
                     FolderItem(entry = entry, onClick = { onFolderClick(entry) })
                 }
                 is MusicEntry -> {
-                    MusicItem(entry = entry, onClick = { onFileClick(entry) })
+                    MusicItem(
+                        entry = entry,
+                        onClick = { onFileClick(entry) },
+                        isCurrentTrack = entry.id == currentPlayingTrackId, // Is this the track in the player?
+                        isActuallyPlaying = isMusicPlaying // Is the player currently playing?
+                    )
                 }
             }
         }
@@ -73,9 +82,16 @@ private fun FolderItem(
 @Composable
 private fun MusicItem(
     entry: MusicEntry,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    isCurrentTrack: Boolean, // Renamed for clarity
+    isActuallyPlaying: Boolean // New parameter for actual playback state
 ) {
-    ListItem(name = entry.name, icon = Icons.Default.AudioFile, onClick = onClick)
+    val icon = if (isCurrentTrack) {
+        if (isActuallyPlaying) Icons.Filled.PlayArrow else Icons.Filled.Pause
+    } else {
+        Icons.Default.AudioFile
+    }
+    ListItem(name = entry.name, icon = icon, onClick = onClick)
 }
 
 @Composable
@@ -104,13 +120,37 @@ fun FolderDisplayPreview() {
         val sampleEntries = listOf(
             FolderEntry(id = "f1", name = "My Favorite Albums", entries = emptyList()),
             MusicEntry(id = "m1", name = "Awesome Song.mp3"),
+            MusicEntry(id = "m2", name = "Epic Theme.flac"),
             FolderEntry(id = "f2", name = "Soundtracks", entries = emptyList()),
-            MusicEntry(id = "m2", name = "Epic Theme.flac")
+            MusicEntry(id = "m3", name = "Paused Song.ogg")
         )
         FolderDisplay(
             entries = sampleEntries,
             onFolderClick = {},
-            onFileClick = {}
+            onFileClick = {},
+            currentPlayingTrackId = "m1",
+            isMusicPlaying = true // m1 is playing
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun FolderDisplayPreviewPaused() {
+    PureswrTheme {
+        val sampleEntries = listOf(
+            FolderEntry(id = "f1", name = "My Favorite Albums", entries = emptyList()),
+            MusicEntry(id = "m1", name = "Awesome Song.mp3"),
+            MusicEntry(id = "m2", name = "Epic Theme.flac"),
+            FolderEntry(id = "f2", name = "Soundtracks", entries = emptyList()),
+            MusicEntry(id = "m3", name = "Paused Song.ogg")
+        )
+        FolderDisplay(
+            entries = sampleEntries,
+            onFolderClick = {},
+            onFileClick = {},
+            currentPlayingTrackId = "m3",
+            isMusicPlaying = false // m3 is the current track, but paused
         )
     }
 }
@@ -122,7 +162,9 @@ fun FolderDisplayEmptyPreview() {
         FolderDisplay(
             entries = emptyList(),
             onFolderClick = {},
-            onFileClick = {}
+            onFileClick = {},
+            currentPlayingTrackId = "",
+            isMusicPlaying = false
         )
     }
 }
