@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -15,13 +16,14 @@ import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import myhilmyhill.pureswr.data.repository.Entry
@@ -36,7 +38,8 @@ fun FolderDisplay(
     onFolderClick: (FolderEntry) -> Unit,
     onFileClick: (MusicEntry) -> Unit,
     currentPlayingTrackId: String,
-    isMusicPlaying: Boolean // New parameter for actual playback state
+    isMusicPlaying: Boolean,
+    isLoading: Boolean
 ) {
     if (entries.isEmpty()) {
         Box(
@@ -61,8 +64,9 @@ fun FolderDisplay(
                     MusicItem(
                         entry = entry,
                         onClick = { onFileClick(entry) },
-                        isCurrentTrack = entry.id == currentPlayingTrackId, // Is this the track in the player?
-                        isActuallyPlaying = isMusicPlaying // Is the player currently playing?
+                        isCurrentTrack = entry.id == currentPlayingTrackId,
+                        isActuallyPlaying = isMusicPlaying,
+                        isLoading = isLoading 
                     )
                 }
             }
@@ -75,28 +79,46 @@ private fun FolderItem(
     entry: FolderEntry,
     onClick: () -> Unit
 ) {
-    ListItem(name = entry.name, icon = Icons.Default.Folder, onClick = onClick)
+    ListItem(
+        name = entry.name,
+        iconSlot = { Icon(imageVector = Icons.Default.Folder, contentDescription = "Folder") },
+        onClick = onClick
+    )
 }
 
 @Composable
 private fun MusicItem(
     entry: MusicEntry,
     onClick: () -> Unit,
-    isCurrentTrack: Boolean, // Renamed for clarity
-    isActuallyPlaying: Boolean // New parameter for actual playback state
+    isCurrentTrack: Boolean,
+    isActuallyPlaying: Boolean,
+    isLoading: Boolean
 ) {
-    val icon = if (isCurrentTrack) {
-        if (isActuallyPlaying) Icons.Filled.PlayArrow else Icons.Filled.Pause
-    } else {
-        Icons.Default.AudioFile
-    }
-    ListItem(name = entry.name, icon = icon, onClick = onClick)
+    ListItem(
+        name = entry.name,
+        iconSlot = { 
+            if (isLoading && isCurrentTrack) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeCap = StrokeCap.Butt)
+            } else {
+                val iconToShow = if (isCurrentTrack) {
+                    if (isActuallyPlaying) Icons.Filled.PlayArrow else Icons.Filled.Pause
+                } else {
+                    Icons.Default.AudioFile
+                }
+                Icon(
+                    imageVector = iconToShow, 
+                    contentDescription = if (isCurrentTrack) if (isActuallyPlaying) "Playing" else "Paused" else "Play file"
+                )
+            }
+        },
+        onClick = onClick
+    )
 }
 
 @Composable
 private fun ListItem(
     name: String,
-    icon: ImageVector,
+    iconSlot: @Composable () -> Unit,
     onClick: () -> Unit
 ) {
     Row(
@@ -107,7 +129,7 @@ private fun ListItem(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Icon(imageVector = icon, contentDescription = null)
+        iconSlot()
         Text(text = name, style = MaterialTheme.typography.bodyLarge)
     }
 }
@@ -128,7 +150,8 @@ fun FolderDisplayPreview() {
             onFolderClick = { },
             onFileClick = { },
             currentPlayingTrackId = "m1",
-            isMusicPlaying = true // m1 is playing
+            isMusicPlaying = true,
+            isLoading = false
         )
     }
 }
@@ -138,10 +161,6 @@ fun FolderDisplayPreview() {
 fun FolderDisplayPaused() {
     PureswrTheme {
         val sampleEntries = listOf(
-            FolderEntry(id = "f1", name = "My Favorite Albums", entries = emptyList()),
-            MusicEntry(id = "m1", name = "Awesome Song.mp3", dir = "/My Favorite Albums"),
-            MusicEntry(id = "m2", name = "Epic Theme.flac", dir = "/My Favorite Albums"),
-            FolderEntry(id = "f2", name = "Soundtracks", entries = emptyList()),
             MusicEntry(id = "m3", name = "Paused Song.ogg", dir = "/Soundtracks")
         )
         FolderDisplay(
@@ -149,7 +168,27 @@ fun FolderDisplayPaused() {
             onFolderClick = { },
             onFileClick = { },
             currentPlayingTrackId = "m3",
-            isMusicPlaying = false // m3 is the current track, but paused
+            isMusicPlaying = false,
+            isLoading = false
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+fun FolderDisplayLoadingPreview() {
+    PureswrTheme {
+        val sampleEntries = listOf(
+            MusicEntry(id = "m1", name = "Another Song.mp3", dir = "/My Favorite Albums"),
+            MusicEntry(id = "m2", name = "Epic Theme Being Loaded.flac", dir = "/My Favorite Albums"),
+        )
+        FolderDisplay(
+            entries = sampleEntries,
+            onFolderClick = { },
+            onFileClick = { },
+            currentPlayingTrackId = "m2",
+            isMusicPlaying = false,
+            isLoading = true
         )
     }
 }
@@ -163,7 +202,8 @@ fun FolderDisplayEmptyPreview() {
             onFolderClick = {},
             onFileClick = {},
             currentPlayingTrackId = "",
-            isMusicPlaying = false
+            isMusicPlaying = false,
+            isLoading = false
         )
     }
 }

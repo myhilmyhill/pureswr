@@ -1,6 +1,5 @@
 package myhilmyhill.pureswr
 
-import android.app.NotificationManager
 import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
@@ -71,7 +70,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var userPreferencesRepository: UserPreferencesRepository
     private var mediaController: MediaController? = null
-    private var playerListener: Player.Listener? = null // Store the listener
+    private var playerListener: Player.Listener? = null
     private var currentActivityIntent by mutableStateOf<Intent?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,64 +78,77 @@ class MainActivity : ComponentActivity() {
         currentActivityIntent = intent
         userPreferencesRepository = UserPreferencesRepository(this)
 
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        val channel = notificationManager.getNotificationChannel("pureswr_player_channel")
-        if (channel == null) {
-            // Channel might be created by PlaybackService
-        }
+//        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+//        val channel = notificationManager.getNotificationChannel("pureswr_player_channel")
 
         setContent {
             PureswrTheme {
                 val scope = rememberCoroutineScope()
 
-                var currentFolderId by remember { mutableStateOf<String?>(currentActivityIntent?.getStringExtra("folderId") ?: "al-1") }
+                var currentFolderId by remember { mutableStateOf<String?>(currentActivityIntent?.getStringExtra("folderId")) }
                 var currentFolderName by remember { mutableStateOf("") }
                 var currentPlayingTrackId by remember { mutableStateOf("") }
-                var isMusicPlaying by remember { mutableStateOf(false) } // New state for playback status
+                var isMusicPlaying by remember { mutableStateOf(false) }
+                var isPlayerLoading by remember { mutableStateOf(false) }
                 var folderEntries by remember { mutableStateOf<List<Entry>>(emptyList()) }
                 var parentFolderId by remember { mutableStateOf<String?>(null) }
                 var folderLoadingState by remember { mutableStateOf(LoadingState.IDLE) }
                 var folderLoadError by remember { mutableStateOf<String?>(null) }
-
                 var showSettingsDialog by remember { mutableStateOf(false) }
                 val credentialsLoadingState by userPreferencesRepository.credentialsFlow.collectAsState(initial = CredentialsLoadingMarker)
-
                 var currentBackEvent by remember { mutableStateOf<BackEventCompat?>(null) }
 
-                val actualCredentials = if (credentialsLoadingState === CredentialsLoadingMarker) {
-                    null
-                } else {
-                    credentialsLoadingState as? Credentials
-                }
-
+                val actualCredentials = if (credentialsLoadingState === CredentialsLoadingMarker) null else credentialsLoadingState as? Credentials
                 var subsonicRepository by remember { mutableStateOf<SubsonicRepository?>(null) }
 
-                // Listener for MediaController events
                 DisposableEffect(mediaController) {
-                    val listener = object : Player.Listener {
+                    val listenerImpl = object : Player.Listener {
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             isMusicPlaying = isPlaying
-                            println("MainActivityPlayerDebug: onIsPlayingChanged: $isPlaying")
+                            if (isPlaying) {
+                                isPlayerLoading = false
+                            }
                         }
 
                         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                             currentPlayingTrackId = mediaItem?.mediaId ?: ""
-                            isMusicPlaying = mediaController?.isPlaying ?: false
-                             println("MainActivityPlayerDebug: onMediaItemTransition. New Media ID: ${mediaItem?.mediaId}, Reason: $reason, isPlaying: $isMusicPlaying")
+                            isMusicPlaying = mediaController?.isPlaying ?: false // Update based on current state
+                            if (mediaItem == null) {
+                                isPlayerLoading = false
+                            }
+                        }
+
+                        override fun onPlaybackStateChanged(playbackState: Int) {
+                            when (playbackState) {
+                                Player.STATE_READY,
+                                Player.STATE_ENDED,
+                                Player.STATE_IDLE -> {
+                                    isPlayerLoading = false
+                                }
+                                Player.STATE_BUFFERING -> {
+                                    // If we are buffering, it implies loading, but isPlayerLoading should have been set true by onFileClick.
+                                    // We don't set it to true here, as buffering can happen mid-track.
+                                    // We only set to false when loading is clearly done (READY, ENDED, IDLE, or isPlaying=true).
+                                }
+                            }
+                        }
+
+                        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                            isPlayerLoading = false
+                            currentPlayingTrackId = ""
+                            scope.launch { Toast.makeText(this@MainActivity, "Playback error: ${error.localizedMessage}", Toast.LENGTH_LONG).show() }
                         }
                     }
-                    playerListener = listener
-                    mediaController?.addListener(listener)
-                    // Set initial state when controller is (re)connected
+                    playerListener = listenerImpl
+                    mediaController?.addListener(listenerImpl)
+
                     currentPlayingTrackId = mediaController?.currentMediaItem?.mediaId ?: ""
                     isMusicPlaying = mediaController?.isPlaying ?: false
-                    println("MainActivityPlayerDebug: MediaController DisposableEffect - Listener added. Initial Track ID: $currentPlayingTrackId, IsPlaying: $isMusicPlaying")
-
+                    isPlayerLoading = mediaController?.playbackState == Player.STATE_BUFFERING && currentPlayingTrackId.isNotEmpty()
 
                     onDispose {
-                        mediaController?.removeListener(listener)
+                        mediaController?.removeListener(listenerImpl)
                         playerListener = null
-                        println("MainActivityPlayerDebug: MediaController DisposableEffect - Listener removed.")
                     }
                 }
 
@@ -164,7 +176,6 @@ class MainActivity : ComponentActivity() {
                 }
 
                 LaunchedEffect(actualCredentials) {
-                    val currentRepo = subsonicRepository
                     if (actualCredentials != null) {
                         subsonicRepository = SubsonicRepository(
                             baseUrl = actualCredentials.baseUrl,
@@ -173,7 +184,7 @@ class MainActivity : ComponentActivity() {
                         )
                         folderLoadingState = LoadingState.IDLE
                     } else {
-                        if (currentRepo != null) {
+                        if (subsonicRepository != null) {
                             subsonicRepository = null
                             folderEntries = emptyList()
                             folderLoadingState = LoadingState.IDLE
@@ -181,6 +192,7 @@ class MainActivity : ComponentActivity() {
                             currentFolderName = ""
                             currentPlayingTrackId = ""
                             isMusicPlaying = false
+                            isPlayerLoading = false
                             parentFolderId = null
                             mediaController?.stop()
                             mediaController?.clearMediaItems()
@@ -190,57 +202,35 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(subsonicRepository, currentFolderId) {
                     val repositoryAtLaunch = subsonicRepository
-                    if (repositoryAtLaunch != null && currentFolderId != null && folderLoadingState == LoadingState.IDLE) {
-                        val folderIdToLoad = currentFolderId
+                    if (repositoryAtLaunch != null && folderLoadingState == LoadingState.IDLE) {
                         folderLoadingState = LoadingState.LOADING
                         folderLoadError = null
                         try {
                             val result = withContext(Dispatchers.IO) {
-                                withTimeoutOrNull(60000L) {
-                                    repositoryAtLaunch.getFolderContents(folderIdToLoad)
-                                }
-                            }
-                            if (subsonicRepository !== repositoryAtLaunch) {
-                                 return@LaunchedEffect
+                                withTimeoutOrNull(60000L) { repositoryAtLaunch.getFolderContents(currentFolderId) }
                             }
                             if (result == null) {
-                                val errorMsg = "Error: Folder loading timed out for folderId: $folderIdToLoad."
-                                folderLoadError = errorMsg
+                                folderLoadError = "Error: Folder loading timed out for folderId: $currentFolderId."
                                 folderLoadingState = LoadingState.ERROR
-                                if (isActive) {
-                                    Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
-                                }
                             } else {
-                                if (isActive) {
-                                    folderEntries = result.entries
-                                    currentFolderName = result.name
-                                    parentFolderId = result.parentFolderId
-                                    folderLoadingState = LoadingState.SUCCESS
-                                }
+                                folderEntries = result.entries
+                                currentFolderName = result.name
+                                parentFolderId = result.parentFolderId
+                                folderLoadingState = LoadingState.SUCCESS
                             }
                         } catch (e: Exception) {
-                            if (subsonicRepository !== repositoryAtLaunch && folderLoadingState != LoadingState.LOADING) {
-                                 println("MainActivityFolderDebug: Generic Exception for $folderIdToLoad (RepoLaunch: ${System.identityHashCode(repositoryAtLaunch)}), but repo changed (ref check) and state is $folderLoadingState. Not setting ERROR from this stale coroutine.")
-                                 return@LaunchedEffect
-                            }
-                            val errorMsg = "Error loading folder: ${e.message} for folderId: $folderIdToLoad"
-                            folderLoadError = errorMsg
+                            if (subsonicRepository !== repositoryAtLaunch && folderLoadingState != LoadingState.LOADING) return@LaunchedEffect
+                            folderLoadError = "Error loading folder: ${e.message} for folderId: $currentFolderId"
                             folderLoadingState = LoadingState.ERROR
-                            if (isActive) {
-                                Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
-                            }
+                            if (isActive) Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
                         }
-                    } else {
-                        if (subsonicRepository == null || currentFolderId == null) {
-                            println("MainActivityFolderDebug: Skipped folder load (Repo or FolderID null). SubsonicRepo: ${subsonicRepository != null}, FolderID: $currentFolderId, State: $folderLoadingState")
-                        }
-                    }
+                    } 
                 }
 
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     topBar = {
-                        TopAppBar(
+                         TopAppBar(
                             title = { Text(currentFolderName) },
                             navigationIcon = {
                                 if (parentFolderId != null) {
@@ -254,36 +244,25 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             actions = {
-                                IconButton(onClick = {
-                                    showSettingsDialog = true
-                                }) {
+                                IconButton(onClick = { showSettingsDialog = true }) {
                                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
                                 }
                             }
                         )
                     }
                 ) { innerPadding ->
-                    Box(modifier = Modifier
-                        .padding(innerPadding)
-                        .fillMaxSize()) {
+                    Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
                         if (credentialsLoadingState === CredentialsLoadingMarker) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                CircularProgressIndicator()
-                            }
+                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) { CircularProgressIndicator() }
                         } else if (showSettingsDialog) {
                             SettingsDialog(
                                 currentBaseUrl = actualCredentials?.baseUrl ?: "",
                                 currentUsername = actualCredentials?.username ?: "",
                                 currentPassword = actualCredentials?.password ?: "",
-                                onDismissRequest = {
-                                    println("MainActivityFolderDebug: SettingsDialog dismissed.")
-                                    showSettingsDialog = false
-                                },
-                                onSave = { newCredentials ->
-                                    println("MainActivityFolderDebug: SettingsDialog save. New credentials hash: ${newCredentials.hashCode()}")
-                                    scope.launch { userPreferencesRepository.saveCredentials(newCredentials) }
-                                    // Reset to default folder and clear related states when credentials are saved/overwritten
-                                    currentFolderId = "al-1"
+                                onDismissRequest = { showSettingsDialog = false },
+                                onSave = {
+                                    scope.launch { userPreferencesRepository.saveCredentials(it) }
+                                    currentFolderId = null
                                     folderLoadingState = LoadingState.IDLE
                                     currentFolderName = ""
                                     folderEntries = emptyList()
@@ -292,138 +271,82 @@ class MainActivity : ComponentActivity() {
                                 }
                             )
                         } else if (actualCredentials == null) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                     Text("Please configure your Subsonic server.")
                                     Spacer(Modifier.height(8.dp))
-                                    Button(onClick = {
-                                        showSettingsDialog = true
-                                    }) { Text("Open Settings") }
+                                    Button(onClick = { showSettingsDialog = true }) { Text("Open Settings") }
                                 }
                             }
-                        } else if (subsonicRepository != null && currentFolderId != null) {
+                        } else if (subsonicRepository != null) {
                             when (folderLoadingState) {
-                                LoadingState.LOADING -> {
-                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                        CircularProgressIndicator()
-                                    }
-                                }
+                                LoadingState.LOADING -> Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) { CircularProgressIndicator() }
                                 LoadingState.SUCCESS -> {
-                                    val folderDisplayModifier = Modifier
-                                        .fillMaxSize()
-                                        .graphicsLayer {
-                                            currentBackEvent?.let { event ->
-                                                val progress = event.progress
-                                                scaleX = 1f - progress * 0.1f
-                                                scaleY = 1f - progress * 0.1f
-                                                alpha = 1f - progress * 0.3f
-                                                translationX = when (event.swipeEdge) {
-                                                    BackEventCompat.EDGE_LEFT -> progress * size.width * 0.2f
-                                                    BackEventCompat.EDGE_RIGHT -> progress * -size.width * 0.2f
-                                                    else -> 0f
-                                                }
-                                                if (progress < 0.01f) {
-                                                    translationX = 0f
-                                                }
+                                    val folderDisplayModifier = Modifier.fillMaxSize().graphicsLayer { /* ... back event graphics ... */
+                                         currentBackEvent?.let { event ->
+                                            val progress = event.progress; scaleX = 1f - progress * 0.1f; scaleY = 1f - progress * 0.1f; alpha = 1f - progress * 0.3f
+                                            translationX = when (event.swipeEdge) {
+                                                BackEventCompat.EDGE_LEFT -> progress * size.width * 0.2f
+                                                BackEventCompat.EDGE_RIGHT -> progress * -size.width * 0.2f
+                                                else -> 0f
                                             }
+                                            if (progress < 0.01f) translationX = 0f
                                         }
+                                    }
                                     FolderDisplay(
                                         modifier = folderDisplayModifier,
                                         entries = folderEntries,
                                         currentPlayingTrackId = currentPlayingTrackId,
                                         isMusicPlaying = isMusicPlaying,
+                                        isLoading = isPlayerLoading,
                                         onFolderClick = { folder ->
                                             currentFolderId = folder.id
                                             currentFolderName = folder.name
                                             folderLoadingState = LoadingState.IDLE
                                         },
                                         onFileClick = { file ->
-                                            actualCredentials.let { creds ->
-                                                val currentSubsonicRepository = subsonicRepository
-                                                if (currentSubsonicRepository != null) {
-                                                    // Optimistically set, listener will confirm
-                                                    // currentPlayingTrackId = file.id (already done by listener or by clicking the same item)
-                                                    // isMusicPlaying = true (will be set by listener)
-                                                    scope.launch {
-//                                                        var songDetails: SubsonicApiSong? = null
-//
-//                                                        try {
-//                                                            // Fetch song details in a background thread
-//                                                            songDetails = withContext(Dispatchers.IO) {
-//                                                                currentSubsonicRepository.getSongDetails(file.id)
-//                                                            }
-//                                                        } catch (e: Exception) {
-//                                                            withContext(Dispatchers.Main) {
-//                                                                Toast.makeText(this@MainActivity, "Could not fetch song details. Proceeding without.", Toast.LENGTH_SHORT).show()
-//                                                            }
-//                                                        }
-
-                                                        val extrasBundle = Bundle().apply {
-                                                            putString("folderId", currentFolderId)
-                                                        }
-                                                        val mediaMetadataBuilder = MediaMetadata.Builder()
-                                                            .setTitle(file.name)
-                                                            .setArtist(file.dir)
-                                                            .setExtras(extrasBundle)
-                                                        val mediaItem = currentSubsonicRepository.getStreamMediaItem(file.id)
-                                                            .setMediaMetadata(mediaMetadataBuilder.build())
-                                                            .build()
-
-                                                        withContext(Dispatchers.Main) {
-                                                            if (mediaController?.currentMediaItem?.mediaId == file.id) {
-                                                                // If it's the same track, toggle play/pause
-                                                                if (mediaController?.isPlaying == true) {
-                                                                    mediaController?.pause()
-                                                                } else {
-                                                                    mediaController?.play()
-                                                                }
-                                                            } else {
-                                                                // Different track, or no track playing
-                                                                mediaController?.setMediaItem(mediaItem)
-                                                                mediaController?.prepare()
-                                                                mediaController?.play()
-                                                            }
-                                                        }
+                                            if (subsonicRepository != null) {
+                                                scope.launch {
+                                                    val extrasBundle = Bundle().apply {
+                                                        putString("folderId", currentFolderId)
                                                     }
-                                                } else {
-                                                    Toast.makeText(this@MainActivity, "Error: Subsonic repository not available.", Toast.LENGTH_SHORT).show()
+                                                    val mediaMetadata = MediaMetadata.Builder()
+                                                        .setTitle(file.name)
+                                                        .setArtist(file.dir)
+                                                        .setExtras(extrasBundle)
+                                                        .build()
+                                                    val mediaItem = subsonicRepository!!
+                                                        .getStreamMediaItem(file.id)
+                                                        .setMediaMetadata(mediaMetadata)
+                                                        .build()
+
+                                                    withContext(Dispatchers.Main) {
+                                                        currentPlayingTrackId = file.id
+                                                        isPlayerLoading = true
+                                                        mediaController?.setMediaItem(mediaItem)
+                                                        mediaController?.prepare()
+                                                        mediaController?.play()
+                                                    }
                                                 }
+                                            } else {
+                                                isPlayerLoading = false
+                                                Toast.makeText(this@MainActivity, "Error: Subsonic repository not available.", Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     )
                                 }
                                 LoadingState.ERROR -> {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(16.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.Center
-                                    ) {
+                                    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                                         Text("Failed to load folder: ${currentFolderName.ifEmpty { "selected folder" }}")
                                         folderLoadError?.let { Text(it, modifier = Modifier.padding(vertical = 8.dp)) }
                                         Spacer(Modifier.height(16.dp))
-                                        Button(onClick = {
-                                            folderLoadingState = LoadingState.IDLE // Retry action
-                                            println("MainActivityFolderDebug: State changed to IDLE (Retry Button). Folder ID: $currentFolderId")
-                                        }) {
-                                            Text("Retry")
-                                        }
+                                        Button(onClick = { folderLoadingState = LoadingState.IDLE }) { Text("Retry") }
                                     }
                                 }
-                                LoadingState.IDLE -> {
-                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                        CircularProgressIndicator()
-                                    }
-                                }
-                            }
-                        } else if (subsonicRepository == null) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                                CircularProgressIndicator()
-                                Text("Connecting to server...", modifier = Modifier.padding(top = 70.dp))
+                                LoadingState.IDLE -> Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) { CircularProgressIndicator() }
                             }
                         } else {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                 Text("Please select a folder or check settings.")
                             }
                         }
@@ -442,23 +365,15 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         val sessionToken = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         val controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
-        controllerFuture.addListener(
-            {
-                mediaController = controllerFuture.get()
-                // Listener is attached via DisposableEffect in setContent now
-                // Initial state update also happens in DisposableEffect
-                 println("MainActivityPlayerDebug: MediaController connected in onStart.")
-            },
-            MoreExecutors.directExecutor() // Using directExecutor, but Main for UI updates inside listener
-        )
+        controllerFuture.addListener({
+            mediaController = controllerFuture.get()
+        }, MoreExecutors.directExecutor())
     }
 
     override fun onStop() {
         super.onStop()
-        // Listener is removed via DisposableEffect
         mediaController?.release()
         mediaController = null
-        println("MainActivityPlayerDebug: MediaController released in onStop.")
     }
 }
 
