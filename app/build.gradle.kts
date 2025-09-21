@@ -64,6 +64,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0") // Added for coroutine testing
     testImplementation("io.ktor:ktor-client-mock:2.3.4") // Added Ktor client mock
+    testImplementation("org.slf4j:slf4j-simple:2.0.13") // SLF4J simple logger for tests
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -3,7 +3,6 @@ package myhilmyhill.pureswr.ui
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,7 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Pause // Added import for Pause icon
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -119,15 +118,15 @@ fun FolderDisplayPreview() {
     PureswrTheme {
         val sampleEntries = listOf(
             FolderEntry(id = "f1", name = "My Favorite Albums", entries = emptyList()),
-            MusicEntry(id = "m1", name = "Awesome Song.mp3"),
-            MusicEntry(id = "m2", name = "Epic Theme.flac"),
+            MusicEntry(id = "m1", name = "Awesome Song.mp3", dir = "/My Favorite Albums"),
+            MusicEntry(id = "m2", name = "Epic Theme.flac", dir = "/My Favorite Albums"),
             FolderEntry(id = "f2", name = "Soundtracks", entries = emptyList()),
-            MusicEntry(id = "m3", name = "Paused Song.ogg")
+            MusicEntry(id = "m3", name = "Paused Song.ogg", dir = "/Soundtracks")
         )
         FolderDisplay(
             entries = sampleEntries,
-            onFolderClick = {},
-            onFileClick = {},
+            onFolderClick = { },
+            onFileClick = { },
             currentPlayingTrackId = "m1",
             isMusicPlaying = true // m1 is playing
         )
@@ -136,19 +135,19 @@ fun FolderDisplayPreview() {
 
 @Preview(showBackground = true)
 @Composable
-fun FolderDisplayPreviewPaused() {
+fun FolderDisplayPaused() {
     PureswrTheme {
         val sampleEntries = listOf(
             FolderEntry(id = "f1", name = "My Favorite Albums", entries = emptyList()),
-            MusicEntry(id = "m1", name = "Awesome Song.mp3"),
-            MusicEntry(id = "m2", name = "Epic Theme.flac"),
+            MusicEntry(id = "m1", name = "Awesome Song.mp3", dir = "/My Favorite Albums"),
+            MusicEntry(id = "m2", name = "Epic Theme.flac", dir = "/My Favorite Albums"),
             FolderEntry(id = "f2", name = "Soundtracks", entries = emptyList()),
-            MusicEntry(id = "m3", name = "Paused Song.ogg")
+            MusicEntry(id = "m3", name = "Paused Song.ogg", dir = "/Soundtracks")
         )
         FolderDisplay(
             entries = sampleEntries,
-            onFolderClick = {},
-            onFileClick = {},
+            onFolderClick = { },
+            onFileClick = { },
             currentPlayingTrackId = "m3",
             isMusicPlaying = false // m3 is the current track, but paused
         )

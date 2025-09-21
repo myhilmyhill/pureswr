@@ -2,33 +2,46 @@ package myhilmyhill.pureswr
 
 import android.app.NotificationManager
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-// import android.util.Log // Logcatで見る場合はこちらを使い、printlnをLog.d("YourTag", "message")に置き換えてください
 import android.widget.Toast
-import androidx.activity.ComponentActivity
 import androidx.activity.BackEventCompat
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.preferencesDataStore
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -44,9 +57,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import myhilmyhill.pureswr.data.model.Credentials
 import myhilmyhill.pureswr.data.preferences.UserPreferencesRepository
-import myhilmyhill.pureswr.data.repository.Entry // Added import for Entry
-import myhilmyhill.pureswr.data.repository.FolderEntry // Keep for other usages if any, or specific casts
-import myhilmyhill.pureswr.data.repository.SubsonicApiException
+import myhilmyhill.pureswr.data.repository.Entry
 import myhilmyhill.pureswr.data.repository.SubsonicApiSong
 import myhilmyhill.pureswr.data.repository.SubsonicRepository
 import myhilmyhill.pureswr.ui.FolderDisplay
@@ -70,7 +81,7 @@ class MainActivity : ComponentActivity() {
         currentActivityIntent = intent
         userPreferencesRepository = UserPreferencesRepository(this)
 
-        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         val channel = notificationManager.getNotificationChannel("pureswr_player_channel")
         if (channel == null) {
             // Channel might be created by PlaybackService
@@ -162,9 +173,6 @@ class MainActivity : ComponentActivity() {
                             username = actualCredentials.username,
                             password = actualCredentials.password
                         )
-                        // currentFolderId = "al-1" // ← この行を削除しました (前の修正)
-                        currentFolderName = ""
-                        folderEntries = emptyList()
                         folderLoadingState = LoadingState.IDLE
                     } else {
                         if (currentRepo != null) {
@@ -186,63 +194,31 @@ class MainActivity : ComponentActivity() {
                     val repositoryAtLaunch = subsonicRepository
                     if (repositoryAtLaunch != null && currentFolderId != null && folderLoadingState == LoadingState.IDLE) {
                         val folderIdToLoad = currentFolderId
-                        println("MainActivityFolderDebug: Attempting to load folder. ID: $folderIdToLoad, State: $folderLoadingState, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
                         folderLoadingState = LoadingState.LOADING
-                        println("MainActivityFolderDebug: State changed to LOADING. ID: $folderIdToLoad, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
                         folderLoadError = null
                         try {
-                            println("MainActivityFolderDebug: Calling getFolderContents for ID: $folderIdToLoad, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
                             val result = withContext(Dispatchers.IO) {
                                 withTimeoutOrNull(60000L) {
-                                    repositoryAtLaunch.getFolderContents(folderIdToLoad!!)
+                                    repositoryAtLaunch.getFolderContents(folderIdToLoad)
                                 }
                             }
                             if (subsonicRepository !== repositoryAtLaunch) {
-                                 println("MainActivityFolderDebug: Repo instance changed (ref check) during load for $folderIdToLoad! Original: ${System.identityHashCode(repositoryAtLaunch)}, Current Global: ${System.identityHashCode(subsonicRepository)}. Current folderLoadingState: $folderLoadingState.")
-                                 if (folderLoadingState == LoadingState.LOADING) {
-                                    println("MainActivityFolderDebug: Repo changed and current coroutine was still LOADING. Discarding result from old repo for $folderIdToLoad.")
-                                 } else {
-                                     println("MainActivityFolderDebug: Repo changed, but current folderLoadingState is $folderLoadingState (not LOADING). This coroutine for $folderIdToLoad will not update state from potentially stale data.")
-                                 }
                                  return@LaunchedEffect
                             }
                             if (result == null) {
                                 val errorMsg = "Error: Folder loading timed out for folderId: $folderIdToLoad."
-                                println("MainActivityFolderDebug: Timeout. ID: $folderIdToLoad, Error: $errorMsg. isActive: $isActive, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
                                 folderLoadError = errorMsg
                                 folderLoadingState = LoadingState.ERROR
-                                println("MainActivityFolderDebug: State changed to ERROR (Timeout). ID: $folderIdToLoad")
                                 if (isActive) {
                                     Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
                                 }
                             } else {
                                 if (isActive) {
-                                    println("MainActivityFolderDebug: Success loading folder. ID: $folderIdToLoad, Result Name: ${result.name}, Entry count: ${result.entries.size}, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
-                                    println("parentFolderId: ${result.parentFolderId}")
                                     folderEntries = result.entries
                                     currentFolderName = result.name
                                     parentFolderId = result.parentFolderId
                                     folderLoadingState = LoadingState.SUCCESS
-                                    println("MainActivityFolderDebug: State changed to SUCCESS. ID: $folderIdToLoad, Entries set: ${folderEntries.size}")
-                                } else {
-                                     println("MainActivityFolderDebug: Success for $folderIdToLoad, but coroutine inactive. State potentially stale, not updated. RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}")
                                 }
-                            }
-                        } catch (e: CancellationException) {
-                            println("MainActivityFolderDebug: Coroutine for $folderIdToLoad (RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}) cancelled. Current global repo: ${System.identityHashCode(subsonicRepository)}. State: $folderLoadingState. Exception: $e")
-                            throw e
-                        } catch (e: SubsonicApiException) {
-                            if (subsonicRepository !== repositoryAtLaunch && folderLoadingState != LoadingState.LOADING) {
-                                 println("MainActivityFolderDebug: SubsonicApiException for $folderIdToLoad (RepoLaunch: ${System.identityHashCode(repositoryAtLaunch)}), but repo changed (ref check) and state is $folderLoadingState. Not setting ERROR from this stale coroutine.")
-                                 return@LaunchedEffect
-                            }
-                            val errorMsg = "API Error: ${e.message} (Code: ${e.code ?: "N/A"}) for folderId: $folderIdToLoad"
-                            println("MainActivityFolderDebug: SubsonicApiException. ID: $folderIdToLoad, Error: $errorMsg, isActive: $isActive, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}, Exception: $e")
-                            folderLoadError = errorMsg
-                            folderLoadingState = LoadingState.ERROR
-                            println("MainActivityFolderDebug: State changed to ERROR (API Exception). ID: $folderIdToLoad")
-                            if (isActive) {
-                                Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
                             }
                         } catch (e: Exception) {
                             if (subsonicRepository !== repositoryAtLaunch && folderLoadingState != LoadingState.LOADING) {
@@ -250,10 +226,8 @@ class MainActivity : ComponentActivity() {
                                  return@LaunchedEffect
                             }
                             val errorMsg = "Error loading folder: ${e.message} for folderId: $folderIdToLoad"
-                            println("MainActivityFolderDebug: Generic Exception. ID: $folderIdToLoad, Error: $errorMsg, isActive: $isActive, RepoInstance: ${System.identityHashCode(repositoryAtLaunch)}, Exception: $e")
                             folderLoadError = errorMsg
                             folderLoadingState = LoadingState.ERROR
-                            println("MainActivityFolderDebug: State changed to ERROR (Generic Exception). ID: $folderIdToLoad")
                             if (isActive) {
                                 Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
                             }
@@ -269,11 +243,12 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     topBar = {
                         TopAppBar(
-                            title = { Text(currentFolderName.ifEmpty { "Folder" }) },
+                            title = { Text(currentFolderName) },
                             navigationIcon = {
                                 if (parentFolderId != null) {
                                     IconButton(onClick = {
                                         currentFolderId = parentFolderId
+                                        currentFolderName = ""
                                         folderLoadingState = LoadingState.IDLE
                                     }) {
                                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -324,7 +299,6 @@ class MainActivity : ComponentActivity() {
                                     Text("Please configure your Subsonic server.")
                                     Spacer(Modifier.height(8.dp))
                                     Button(onClick = {
-                                        println("MainActivityFolderDebug: Open Settings button clicked (actualCredentials null).")
                                         showSettingsDialog = true
                                     }) { Text("Open Settings") }
                                 }
@@ -334,10 +308,6 @@ class MainActivity : ComponentActivity() {
                                 LoadingState.LOADING -> {
                                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                         CircularProgressIndicator()
-                                        Text(
-                                            if (currentFolderName.isNotEmpty()) "Loading $currentFolderName..." else "Loading...",
-                                            modifier = Modifier.padding(top = 70.dp)
-                                        )
                                     }
                                 }
                                 LoadingState.SUCCESS -> {
@@ -366,6 +336,7 @@ class MainActivity : ComponentActivity() {
                                         isMusicPlaying = isMusicPlaying,
                                         onFolderClick = { folder ->
                                             currentFolderId = folder.id
+                                            currentFolderName = folder.name
                                             folderLoadingState = LoadingState.IDLE
                                         },
                                         onFileClick = { file ->
@@ -394,8 +365,8 @@ class MainActivity : ComponentActivity() {
                                                             putString("folderId", currentFolderId)
                                                         }
                                                         val mediaMetadataBuilder = MediaMetadata.Builder()
-                                                            .setTitle("${songDetails?.title} / ${songDetails?.artist}")
-                                                            .setArtist(songDetails?.path)
+                                                            .setTitle(file.name)
+                                                            .setArtist(file.dir)
                                                             .setExtras(extrasBundle)
 
                                                         val mediaItem = MediaItem.Builder()
@@ -503,6 +474,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun GreetingPreview() {
     PureswrTheme {
-        Text("PureSWR App Preview")
+        Text("App Preview")
     }
 }

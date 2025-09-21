@@ -2,9 +2,7 @@
 package myhilmyhill.pureswr.data.repository
 
 import io.ktor.client.* // HttpClient
-import io.ktor.client.call.* // body
 import io.ktor.client.engine.cio.CIO
-import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.contentnegotiation.* // ContentNegotiation
 import io.ktor.client.request.* // get, parameter, HttpRequestBuilder
 import io.ktor.client.statement.HttpResponse
@@ -30,17 +28,16 @@ data class FolderEntry(
     override val id: String,
     override val name: String,
     val entries: List<Entry>,
-    val parentFolderId: String? = null // ★ parentFolderId を追加
+    val parentFolderId: String? = null
 ) : Entry
 
 @Serializable
 data class MusicEntry(
     override val id: String,
-    override val name: String
-    // parentFolderId は MusicEntry には通常不要
+    override val name: String,
+    val dir: String
 ) : Entry
 
-// Subsonic API DTOs (変更なし)
 @Serializable
 private data class SubsonicResponse(
     @SerialName("subsonic-response")
@@ -52,41 +49,27 @@ private data class SubsonicResponseContent(
     val status: String,
     val version: String? = null,
     val directory: SubsonicDirectory? = null,
-    val musicFolders: SubsonicMusicFolders? = null,
     val error: SubsonicError? = null
 )
 
 @Serializable
-private data class SubsonicMusicFolders(
-    @SerialName("musicFolder")
-    val musicFolder: List<SubsonicMusicFolderEntry>? = null
+private data class SubsonicDirectory(
+    val id: String? = null,
+    val name: String? = null,
+    val parent: String? = null,
+    val path: String? = null,
+    val child: List<SubsonicChildEntry>? = null
 )
 
 @Serializable
-data class SubsonicMusicFolderEntry( // This DTO is for top-level music folders from getMusicFolders.view
+private data class SubsonicChildEntry(
     val id: String,
-    val name: String? = null
-    // It does not have a 'parent' field from Subsonic, we infer it.
-)
-
-@Serializable
-private data class SubsonicDirectory( // This DTO is for a specific directory from getMusicDirectory.view
-    val id: String? = null, // The ID of this directory
-    val name: String? = null, // The name of this directory
-    val parent: String? = null, // The ID of the parent directory
-    val child: List<SubsonicChildEntry>? = null // Children of this directory
-)
-
-@Serializable
-private data class SubsonicChildEntry( // This DTO is for an entry within a SubsonicDirectory
-    val id: String,
-    val parent: String? = null, // ID of the directory containing this child entry
+    val parent: String? = null,
     val isDir: Boolean,
     val title: String? = null,
-    val name: String? = null,
+    val path: String? = null,
     val artist: String? = null,
     val album: String? = null,
-    val coverArt: String? = null
 )
 
 @Serializable
@@ -95,7 +78,6 @@ private data class SubsonicError(
     val message: String
 )
 
-// DTOs for getSong.view (変更なし)
 @Serializable
 data class SubsonicApiSong(
     val id: String,
@@ -143,15 +125,13 @@ class SubsonicRepository(
 ) {
     companion object {
         const val SYNTHETIC_ROOT_ID = "al-1"
-        const val SYNTHETIC_ROOT_NAME = "Subsonic Library"
     }
     private val apiVersion = "1.16.1"
     private val restPath = "rest"
-    private val clientName: String = "PureSWR"
+    private val clientName: String = "pureswr"
 
     private val lenientJsonParser = Json {
         ignoreUnknownKeys = true
-        isLenient = true
     }
 
     private val client: HttpClient by lazy {
@@ -189,32 +169,47 @@ class SubsonicRepository(
     suspend fun getFolderContents(folderId: String?): FolderEntry {
         val actualFolderId = folderId ?: SYNTHETIC_ROOT_ID
         val endpoint = "$restPath/getMusicDirectory.view"
-        val httpResponse= performHttpRequest(endpoint) {
+        val httpResponse = performHttpRequest(endpoint) {
             url.parameters.append("id", actualFolderId)
         }
         val responseText = httpResponse.bodyAsText()
-        val responseBody: SubsonicResponse = lenientJsonParser.decodeFromString(responseText)
+
+        val responseBody: SubsonicResponse = try {
+            lenientJsonParser.decodeFromString(responseText)
+        } catch (e: SerializationException) {
+            throw SubsonicApiException(
+                message = "Failed to deserialize the response body with lenient parsing. Original deserialization error: ${e.message}. Raw response body: '$responseText'",
+                code = null
+            )
+        }
 
         if (responseBody.subsonicResponse?.status == "ok") {
             val directoryNode = responseBody.subsonicResponse.directory
                 ?: throw SubsonicApiException("Directory data is null for folderId '$actualFolderId'. Raw response: '$responseText'")
+
             val entries = directoryNode.child?.map { subsonicChild ->
-                val entryName = subsonicChild.name ?: subsonicChild.title ?: "Unknown Entry"
                 if (subsonicChild.isDir) {
                     FolderEntry(
-                        id = subsonicChild.id,
-                        name = entryName,
+                        id = subsonicChild.id ?: throw SubsonicApiException("subsonicChild.id is null. Raw response: '$responseText'"),
+                        name = subsonicChild.title ?: throw SubsonicApiException("subsonicChild.title are null. Raw response: '$responseText'"),
                         entries = emptyList(),
                         parentFolderId = if (subsonicChild.parent == "-1") null else subsonicChild.parent
                     )
                 } else {
-                    MusicEntry(id = subsonicChild.id, name = entryName)
+                    val fullPath = subsonicChild.path ?: ""
+                    val name = fullPath.substringAfterLast("/")
+                    val dir = fullPath.substringBeforeLast("/", missingDelimiterValue = "/").ifEmpty { "/" }
+                    MusicEntry(
+                        id = subsonicChild.id ?: throw SubsonicApiException("subsonicChild.id is null for music entry. Raw response: '$responseText'"),
+                        name = name,
+                        dir = dir,
+                    )
                 }
             } ?: emptyList()
 
             return FolderEntry(
-                id = directoryNode.id ?: throw SubsonicApiException("directoryNode.id is null "),
-                name = directoryNode.name ?: throw SubsonicApiException("directoryNode.name is null "),
+                id = directoryNode.id ?: throw SubsonicApiException("directoryNode.id is null. Raw response: '$responseText'"),
+                name = directoryNode.name ?: throw SubsonicApiException("directoryNode.name is null. Raw response: '$responseText'"),
                 entries = entries,
                 parentFolderId = if (directoryNode.parent == "-1") null else directoryNode.parent
             )
@@ -232,10 +227,17 @@ class SubsonicRepository(
             url.parameters.append("id", songId)
         }
         val responseText = httpResponse.bodyAsText()
-        val responseBody: SubsonicGetSongResponse = lenientJsonParser.decodeFromString(responseText)
+        val responseBody: SubsonicGetSongResponse = try {
+            lenientJsonParser.decodeFromString(responseText)
+        } catch (e: SerializationException) {
+            throw SubsonicApiException(
+                message = "Failed to deserialize getSong.view response body. Original error: ${e.message}. Raw response: '$responseText'",
+                code = null
+            )
+        }
 
         if (responseBody.response?.status == "ok") {
-            return responseBody.response.song ?: throw SubsonicApiException("Song data is null in successful response. Raw response: '$responseText'")
+            return responseBody.response.song ?: throw SubsonicApiException("Song data is null in successful getSong.view response. Raw response: '$responseText'")
         } else {
             val error = responseBody.response?.error
             val errorMessage = error?.message ?: "Subsonic API reported failure for getSong (no specific error message in parsed response)"
