@@ -41,7 +41,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -58,7 +57,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import myhilmyhill.pureswr.data.model.Credentials
 import myhilmyhill.pureswr.data.preferences.UserPreferencesRepository
 import myhilmyhill.pureswr.data.repository.Entry
-import myhilmyhill.pureswr.data.repository.SubsonicApiSong
 import myhilmyhill.pureswr.data.repository.SubsonicRepository
 import myhilmyhill.pureswr.ui.FolderDisplay
 import myhilmyhill.pureswr.ui.SettingsDialog
@@ -157,7 +155,7 @@ class MainActivity : ComponentActivity() {
                             progress.collect { event -> currentBackEvent = event }
                             currentFolderId = parentFolderId
                             folderLoadingState = LoadingState.IDLE
-                        } catch (e: CancellationException) {
+                        } catch (_: CancellationException) {
                             // Back gesture cancelled
                         } finally {
                             currentBackEvent = null
@@ -342,25 +340,24 @@ class MainActivity : ComponentActivity() {
                                         onFileClick = { file ->
                                             actualCredentials.let { creds ->
                                                 val currentSubsonicRepository = subsonicRepository
-                                                if (true && currentSubsonicRepository != null) {
+                                                if (currentSubsonicRepository != null) {
                                                     // Optimistically set, listener will confirm
                                                     // currentPlayingTrackId = file.id (already done by listener or by clicking the same item)
                                                     // isMusicPlaying = true (will be set by listener)
                                                     scope.launch {
-                                                        var songDetails: SubsonicApiSong? = null
+//                                                        var songDetails: SubsonicApiSong? = null
+//
+//                                                        try {
+//                                                            // Fetch song details in a background thread
+//                                                            songDetails = withContext(Dispatchers.IO) {
+//                                                                currentSubsonicRepository.getSongDetails(file.id)
+//                                                            }
+//                                                        } catch (e: Exception) {
+//                                                            withContext(Dispatchers.Main) {
+//                                                                Toast.makeText(this@MainActivity, "Could not fetch song details. Proceeding without.", Toast.LENGTH_SHORT).show()
+//                                                            }
+//                                                        }
 
-                                                        try {
-                                                            // Fetch song details in a background thread
-                                                            songDetails = withContext(Dispatchers.IO) {
-                                                                currentSubsonicRepository.getSongDetails(file.id)
-                                                            }
-                                                        } catch (e: Exception) {
-                                                            withContext(Dispatchers.Main) {
-                                                                Toast.makeText(this@MainActivity, "Could not fetch song details. Proceeding without.", Toast.LENGTH_SHORT).show()
-                                                            }
-                                                        }
-
-                                                        val downloadUrl = "${creds.baseUrl}/rest/download?u=${creds.username}&p=${creds.password}&v=1.16.1&c=PureSWR&id=${file.id}"
                                                         val extrasBundle = Bundle().apply {
                                                             putString("folderId", currentFolderId)
                                                         }
@@ -368,10 +365,7 @@ class MainActivity : ComponentActivity() {
                                                             .setTitle(file.name)
                                                             .setArtist(file.dir)
                                                             .setExtras(extrasBundle)
-
-                                                        val mediaItem = MediaItem.Builder()
-                                                            .setUri(downloadUrl.toUri())
-                                                            .setMediaId(file.id)
+                                                        val mediaItem = currentSubsonicRepository.getStreamMediaItem(file.id)
                                                             .setMediaMetadata(mediaMetadataBuilder.build())
                                                             .build()
 
@@ -389,7 +383,6 @@ class MainActivity : ComponentActivity() {
                                                                 mediaController?.prepare()
                                                                 mediaController?.play()
                                                             }
-                                                            // Toast.makeText(this@MainActivity, "Playing: $songTitle", Toast.LENGTH_SHORT).show() // Toast can be annoying on toggle
                                                         }
                                                     }
                                                 } else {
@@ -442,7 +435,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        println("MainActivityFolderDebug: onNewIntent. Intent Action: ${intent.action}, Data: ${intent.dataString}, Extras: ${intent.extras?.keySet()?.joinToString { key -> "$key=${intent.extras?.get(key)}" }}")
         currentActivityIntent = intent
     }
 

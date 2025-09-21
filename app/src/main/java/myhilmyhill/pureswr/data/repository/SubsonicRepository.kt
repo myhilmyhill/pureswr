@@ -1,13 +1,16 @@
 // C:/Users/my/AndroidStudioProjects/pureswr/app/src/main/java/myhilmyhill/pureswr/data/repository/SubsonicRepository.kt
 package myhilmyhill.pureswr.data.repository
 
+import androidx.core.net.toUri
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import io.ktor.client.* // HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.* // ContentNegotiation
 import io.ktor.client.request.* // get, parameter, HttpRequestBuilder
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
-import io.ktor.http.* // appendPathSegments
+import io.ktor.http.* // appendPathSegments, URLBuilder
 import io.ktor.serialization.kotlinx.json.json // json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
@@ -198,6 +201,7 @@ class SubsonicRepository(
                 } else {
                     val fullPath = subsonicChild.path ?: ""
                     val name = fullPath.substringAfterLast("/")
+                    // Using the version of 'dir' calculation currently in your file
                     val dir = fullPath.substringBeforeLast("/", missingDelimiterValue = "/").ifEmpty { "/" }
                     MusicEntry(
                         id = subsonicChild.id ?: throw SubsonicApiException("subsonicChild.id is null for music entry. Raw response: '$responseText'"),
@@ -244,6 +248,21 @@ class SubsonicRepository(
             val errorCode = error?.code
             throw SubsonicApiException("$errorMessage. Raw response: '$responseText'", errorCode)
         }
+    }
+
+    fun getStreamMediaItem(songId: String): MediaItem.Builder {
+        val streamUrl = URLBuilder(baseUrl).apply {
+            appendPathSegments(restPath, "stream.view")
+            parameters.append("id", songId)
+            parameters.append("u", username)
+            parameters.append("p", this@SubsonicRepository.password) // Consider security implications of password in URL
+            parameters.append("v", apiVersion)
+            parameters.append("c", clientName)
+        }.build().toString()
+        val mediaItemBuilder = MediaItem.Builder()
+            .setUri(streamUrl.toUri())
+            .setMediaId(songId)
+        return mediaItemBuilder
     }
 
     fun close() {
