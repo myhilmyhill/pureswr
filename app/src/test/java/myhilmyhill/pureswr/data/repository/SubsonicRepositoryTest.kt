@@ -13,7 +13,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import kotlinx.serialization.json.Json
 
-class SubsonicFolderRepositoryTest {
+class SubsonicRepositoryTest {
     @Test
     fun `getFolderContents_producesCorrectEffectiveFolderNames`() = runTest {
         val mockJsonResponse = """
