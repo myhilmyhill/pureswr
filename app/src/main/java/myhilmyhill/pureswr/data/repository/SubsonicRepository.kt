@@ -142,7 +142,7 @@ class SubsonicRepository(
     private val httpClientOverride: HttpClient? = null
 ) {
     companion object {
-        const val SYNTHETIC_ROOT_ID = "__SUBSONIC_ROOT__"
+        const val SYNTHETIC_ROOT_ID = "al-1"
         const val SYNTHETIC_ROOT_NAME = "Subsonic Library"
     }
     private val apiVersion = "1.16.1"
@@ -152,21 +152,6 @@ class SubsonicRepository(
     private val lenientJsonParser = Json {
         ignoreUnknownKeys = true
         isLenient = true
-    }
-
-    private val strictJsonParser = Json {
-        ignoreUnknownKeys = true
-        isLenient = false
-    }
-
-    private fun HttpRequestBuilder.commonParameters() {
-        url.parameters.apply {
-            append("u", username)
-            append("p", this@SubsonicRepository.password)
-            append("v", apiVersion)
-            append("c", clientName)
-            append("f", "json")
-        }
     }
 
     private val client: HttpClient by lazy {
@@ -190,150 +175,72 @@ class SubsonicRepository(
             url {
                 appendPathSegments(endpoint)
             }
-            commonParameters()
+            url.parameters.apply {
+                append("u", username)
+                append("p", this@SubsonicRepository.password)
+                append("v", apiVersion)
+                append("c", clientName)
+                append("f", "json")
+            }
             requestSetup()
         }
     }
 
     suspend fun getFolderContents(folderId: String?): FolderEntry {
-        val isRequestingRoot = folderId == null
-        val endpoint = if (isRequestingRoot) "$restPath/getMusicFolders.view" else "$restPath/getMusicDirectory.view"
+        val actualFolderId = folderId ?: SYNTHETIC_ROOT_ID
+        val endpoint = "$restPath/getMusicDirectory.view"
+        val httpResponse= performHttpRequest(endpoint) {
+            url.parameters.append("id", actualFolderId)
+        }
+        val responseText = httpResponse.bodyAsText()
+        val responseBody: SubsonicResponse = lenientJsonParser.decodeFromString(responseText)
 
-        var httpResponse: HttpResponse? = null
-        var responseText: String? = null
-
-        try {
-            httpResponse = performHttpRequest(endpoint) {
-                if (!isRequestingRoot) {
-                    url.parameters.append("id", folderId!!)
-                }
-            }
-            
-            responseText = httpResponse.bodyAsText()
-            val responseBody: SubsonicResponse = lenientJsonParser.decodeFromString(responseText)
-
-            if (responseBody.subsonicResponse?.status == "ok") {
-                if (isRequestingRoot) {
-                    val musicFolderEntries = responseBody.subsonicResponse.musicFolders?.musicFolder?.map { dto ->
-                        FolderEntry(
-                            id = dto.id,
-                            name = dto.name ?: "Unnamed Folder",
-                            entries = emptyList(),
-                            parentFolderId = null
-                        )
-                    } ?: emptyList()
-                    return FolderEntry(
-                        id = SYNTHETIC_ROOT_ID,
-                        name = SYNTHETIC_ROOT_NAME,
-                        entries = musicFolderEntries,
-                        parentFolderId = null // ★ Synthetic root has no parent
+        if (responseBody.subsonicResponse?.status == "ok") {
+            val directoryNode = responseBody.subsonicResponse.directory
+                ?: throw SubsonicApiException("Directory data is null for folderId '$actualFolderId'. Raw response: '$responseText'")
+            val entries = directoryNode.child?.map { subsonicChild ->
+                val entryName = subsonicChild.name ?: subsonicChild.title ?: "Unknown Entry"
+                if (subsonicChild.isDir) {
+                    FolderEntry(
+                        id = subsonicChild.id,
+                        name = entryName,
+                        entries = emptyList(),
+                        parentFolderId = if (subsonicChild.parent == "-1") null else subsonicChild.parent
                     )
-                } else { // Requesting a specific directory
-                    val directoryNode = responseBody.subsonicResponse.directory
-                    if (directoryNode?.id != null && directoryNode.name != null) {
-                        val entries = directoryNode.child?.mapNotNull { subsonicChild ->
-                            val entryName = subsonicChild.name ?: subsonicChild.title ?: "Unknown Entry"
-                            if (subsonicChild.isDir) {
-                                FolderEntry(
-                                    id = subsonicChild.id,
-                                    name = entryName,
-                                    entries = emptyList(),
-                                    parentFolderId = if (subsonicChild.parent == "-1") null else subsonicChild.parent
-                                )
-                            } else {
-                                MusicEntry(id = subsonicChild.id, name = entryName)
-                            }
-                        } ?: emptyList()
-                        return FolderEntry(
-                            id = directoryNode.id,
-                            name = directoryNode.name,
-                            entries = entries,
-                            parentFolderId = if (directoryNode.parent == "-1") null else directoryNode.parent
-                        )
-                    } else {
-                        throw SubsonicApiException("Incomplete directory data for folderId '$folderId': ID or Name from server is null. Raw response: '$responseText'")
-                    }
+                } else {
+                    MusicEntry(id = subsonicChild.id, name = entryName)
                 }
-            } else {
-                val error = responseBody.subsonicResponse?.error
-                val errorMessage = error?.message ?: "Subsonic API reported failure (no specific error message in parsed response)"
-                val errorCode = error?.code
-                throw SubsonicApiException("$errorMessage. Raw response: '$responseText'", errorCode)
-            }
-        } catch (e: SubsonicApiException) {
-            throw e 
-        } catch (e: ClientRequestException) { 
-            val errorResponseText = e.response.bodyAsText()
-            try {
-                val errorBody: SubsonicResponse = strictJsonParser.decodeFromString(errorResponseText)
-                errorBody.subsonicResponse?.error?.let {
-                    throw SubsonicApiException(it.message, it.code)
-                }
-                throw SubsonicApiException("HTTP Error ${e.response.status.value}: ${e.message}. Raw error body: '$errorResponseText'", e.response.status.value)
-            } catch (parseEx: Exception) { 
-                throw SubsonicApiException("HTTP Error ${e.response.status.value}: ${e.message}. Failed to parse error response body: '$errorResponseText'. Parse Error: ${parseEx.message}", e.response.status.value)
-            }
-        } catch (e: SerializationException) { 
-            val status = httpResponse?.status?.value ?: "Unknown Status (httpResponse was null)"
-            val rawText = responseText ?: "Unknown Body (responseText was null)"
-            throw SubsonicApiException(
-                message = "Received HTTP $status, but failed to deserialize the response body with lenient parsing. " +
-                          "Original deserialization error: ${e.message}. Raw response body: '$rawText'",
-                code = null 
+            } ?: emptyList()
+
+            return FolderEntry(
+                id = directoryNode.id ?: throw SubsonicApiException("directoryNode.id is null "),
+                name = directoryNode.name ?: throw SubsonicApiException("directoryNode.name is null "),
+                entries = entries,
+                parentFolderId = if (directoryNode.parent == "-1") null else directoryNode.parent
             )
-        } catch (e: Exception) { 
-            val status = httpResponse?.status?.value ?: "Unknown Status (httpResponse was null)"
-            val rawTextInfo = responseText?.let { "Raw response: '$it'" } ?: "Response text not available (responseText was null)."
-            throw SubsonicApiException("An unexpected general error occurred. HTTP Status: $status. Error: ${e.message ?: "Unknown error type"}. $rawTextInfo")
+        } else {
+            val error = responseBody.subsonicResponse?.error
+            val errorMessage = error?.message ?: "Subsonic API reported failure (no specific error message in parsed response)"
+            val errorCode = error?.code
+            throw SubsonicApiException("$errorMessage. Raw response: '$responseText'", errorCode)
         }
     }
 
     suspend fun getSongDetails(songId: String): SubsonicApiSong {
         val endpoint = "$restPath/getSong.view"
-        var httpResponse: HttpResponse? = null
-        var responseText: String? = null
+        val httpResponse = performHttpRequest(endpoint) {
+            url.parameters.append("id", songId)
+        }
+        val responseText = httpResponse.bodyAsText()
+        val responseBody: SubsonicGetSongResponse = lenientJsonParser.decodeFromString(responseText)
 
-        try {
-            httpResponse = performHttpRequest(endpoint) {
-                url.parameters.append("id", songId)
-            }
-            
-            responseText = httpResponse.bodyAsText()
-            val responseBody: SubsonicGetSongResponse = lenientJsonParser.decodeFromString(responseText)
-
-            if (responseBody.response?.status == "ok") {
-                return responseBody.response.song ?: throw SubsonicApiException("Song data is null in successful response. Raw response: '$responseText'")
-            } else {
-                val error = responseBody.response?.error
-                val errorMessage = error?.message ?: "Subsonic API reported failure for getSong (no specific error message in parsed response)"
-                val errorCode = error?.code
-                throw SubsonicApiException("$errorMessage. Raw response: '$responseText'", errorCode)
-            }
-        } catch (e: SubsonicApiException) {
-            throw e
-        } catch (e: ClientRequestException) {
-            val errorResponseText = e.response.bodyAsText()
-            try {
-                val errorBody: SubsonicGetSongResponse = strictJsonParser.decodeFromString(errorResponseText) 
-                errorBody.response?.error?.let {
-                    throw SubsonicApiException(it.message, it.code)
-                }
-                throw SubsonicApiException("HTTP Error ${e.response.status.value}: ${e.message}. Raw error body: '$errorResponseText'", e.response.status.value)
-            } catch (parseEx: Exception) {
-                throw SubsonicApiException("HTTP Error ${e.response.status.value}: ${e.message}. Failed to parse error response body for getSong: '$errorResponseText'. Parse Error: ${parseEx.message}", e.response.status.value)
-            }
-        } catch (e: SerializationException) {
-            val status = httpResponse?.status?.value ?: "Unknown Status (httpResponse was null)"
-            val rawText = responseText ?: "Unknown Body (responseText was null)"
-            throw SubsonicApiException(
-                message = "Received HTTP $status for getSong, but failed to deserialize the response body. " +
-                          "Original deserialization error: ${e.message}. Raw response body: '$rawText'",
-                code = null
-            )
-        } catch (e: Exception) {
-            val status = httpResponse?.status?.value ?: "Unknown Status (httpResponse was null)"
-            val rawTextInfo = responseText?.let { "Raw response: '$it'" } ?: "Response text not available."
-            throw SubsonicApiException("An unexpected error occurred in getSongDetails. HTTP Status: $status. Error: ${e.message ?: "Unknown error type"}. $rawTextInfo")
+        if (responseBody.response?.status == "ok") {
+            return responseBody.response.song ?: throw SubsonicApiException("Song data is null in successful response. Raw response: '$responseText'")
+        } else {
+            val error = responseBody.response?.error
+            val errorMessage = error?.message ?: "Subsonic API reported failure for getSong (no specific error message in parsed response)"
+            val errorCode = error?.code
+            throw SubsonicApiException("$errorMessage. Raw response: '$responseText'", errorCode)
         }
     }
 

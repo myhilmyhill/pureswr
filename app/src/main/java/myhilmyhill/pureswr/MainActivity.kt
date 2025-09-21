@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStore
@@ -46,12 +47,11 @@ import myhilmyhill.pureswr.data.preferences.UserPreferencesRepository
 import myhilmyhill.pureswr.data.repository.Entry // Added import for Entry
 import myhilmyhill.pureswr.data.repository.FolderEntry // Keep for other usages if any, or specific casts
 import myhilmyhill.pureswr.data.repository.SubsonicApiException
+import myhilmyhill.pureswr.data.repository.SubsonicApiSong
 import myhilmyhill.pureswr.data.repository.SubsonicRepository
 import myhilmyhill.pureswr.ui.FolderDisplay
 import myhilmyhill.pureswr.ui.SettingsDialog
 import myhilmyhill.pureswr.ui.theme.PureswrTheme
-
-val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 enum class LoadingState { IDLE, LOADING, SUCCESS, ERROR }
 
@@ -91,7 +91,6 @@ class MainActivity : ComponentActivity() {
 
                 var showSettingsDialog by remember { mutableStateOf(false) }
                 val credentialsLoadingState by userPreferencesRepository.credentialsFlow.collectAsState(initial = CredentialsLoadingMarker)
-                var initialDialogDecisionMade by remember { mutableStateOf(false) }
 
                 var currentBackEvent by remember { mutableStateOf<BackEventCompat?>(null) }
 
@@ -132,31 +131,12 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-
                 LaunchedEffect(currentActivityIntent) {
-                    val intentToProcess = currentActivityIntent // ローカルコピーを使用
-                    val newFolderIdFromIntent = intentToProcess?.getStringExtra("folderId")
-                    println("MainActivityFolderDebug: LaunchedEffect(currentActivityIntent) triggered. Intent: $intentToProcess, newFolderIdFromIntent: $newFolderIdFromIntent, currentFolderId (before change): $currentFolderId")
-
-                    if (newFolderIdFromIntent != null && newFolderIdFromIntent != currentFolderId) {
-                        println("MainActivityFolderDebug: Intent changed. New folderId: $newFolderIdFromIntent. Current (old): $currentFolderId")
+                    val newFolderIdFromIntent = currentActivityIntent?.getStringExtra("folderId")
+                    println("MainActivityFolderDebug: LaunchedEffect for new folder ID: $newFolderIdFromIntent")
+                    if (newFolderIdFromIntent != null && currentFolderId != newFolderIdFromIntent) {
                         currentFolderId = newFolderIdFromIntent
                         folderLoadingState = LoadingState.IDLE
-                        println("MainActivityFolderDebug: State set to IDLE due to intent change. New Folder ID: $currentFolderId. History Cleared.")
-                    } else if (newFolderIdFromIntent != null && newFolderIdFromIntent == currentFolderId) {
-                        if (folderLoadingState != LoadingState.LOADING && folderLoadingState != LoadingState.IDLE) {
-                            println("MainActivityFolderDebug: Same folderId ($newFolderIdFromIntent) received from intent, state was $folderLoadingState. Ensuring reload by setting to IDLE.")
-                            folderLoadingState = LoadingState.IDLE
-                        } else {
-                             println("MainActivityFolderDebug: Same folderId ($newFolderIdFromIntent) received, and already loading or idle ($folderLoadingState). No state change needed here from LaunchedEffect.")
-                        }
-                    } else if (newFolderIdFromIntent == null && intentToProcess?.action == Intent.ACTION_MAIN) {
-                         println("MainActivityFolderDebug: LaunchedEffect(currentActivityIntent) - Main action, no folderId from intent. currentFolderId: $currentFolderId. Ensuring load for default/current.")
-                         if (currentFolderId == (intentToProcess.getStringExtra("folderId") ?: "al-1") && folderLoadingState != LoadingState.LOADING && folderLoadingState != LoadingState.SUCCESS) {
-                            folderLoadingState = LoadingState.IDLE
-                         }
-                    } else {
-                        println("MainActivityFolderDebug: LaunchedEffect(currentActivityIntent) - folderId did not change or was null. newFolderIdFromIntent: $newFolderIdFromIntent, currentFolderId: $currentFolderId, Intent: $intentToProcess")
                     }
                 }
 
@@ -166,7 +146,6 @@ class MainActivity : ComponentActivity() {
                             progress.collect { event -> currentBackEvent = event }
                             currentFolderId = parentFolderId
                             folderLoadingState = LoadingState.IDLE
-                            println("MainActivityFolderDebug: State changed to IDLE (PredictiveBack). New Folder ID: $currentFolderId")
                         } catch (e: CancellationException) {
                             // Back gesture cancelled
                         } finally {
@@ -175,60 +154,20 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Updated LaunchedEffect for showing settings dialog
-                LaunchedEffect(credentialsLoadingState, initialDialogDecisionMade, currentActivityIntent) {
-                    if (credentialsLoadingState !== CredentialsLoadingMarker && !initialDialogDecisionMade) {
-                        val intentToInspect = currentActivityIntent // Capture for consistent use
-                        val hasFolderIdFromIntent = intentToInspect?.getStringExtra("folderId") != null
-
-                        println("MainActivityResolverDebug: Effect for dialog. CredentialsLoaded: ${credentialsLoadingState !== CredentialsLoadingMarker}, DecisionMade: $initialDialogDecisionMade, HasFolderId: $hasFolderIdFromIntent, ActualCredsNull: ${actualCredentials == null}")
-
-                        if (actualCredentials == null && !hasFolderIdFromIntent) {
-                            println("MainActivityResolverDebug: SHOWING settings dialog. Reason: No credentials AND no folderId from intent.")
-                            showSettingsDialog = true
-                        } else {
-                            println("MainActivityResolverDebug: NOT showing settings dialog. (ActualCredsNull: ${actualCredentials == null}, HasFolderId: $hasFolderIdFromIntent)")
-                        }
-                        initialDialogDecisionMade = true
-                    } else {
-                        println("MainActivityResolverDebug: Effect for dialog SKIPPED. (CS_Marker: ${credentialsLoadingState === CredentialsLoadingMarker}, DecisionMade: $initialDialogDecisionMade)")
-                    }
-                }
-
                 LaunchedEffect(actualCredentials) {
                     val currentRepo = subsonicRepository
                     if (actualCredentials != null) {
-                        val credentialsChanged = currentRepo == null ||
-                                                 currentRepo.baseUrl != actualCredentials.baseUrl ||
-                                                 currentRepo.username != actualCredentials.username
-
-                        if (credentialsChanged) {
-                            println("MainActivityFolderDebug: Credentials changed or repo null. Recreating SubsonicRepository. Current instance: ${System.identityHashCode(currentRepo)}. New credentials hash: ${actualCredentials.hashCode()}")
-                            subsonicRepository = SubsonicRepository(
-                                baseUrl = actualCredentials.baseUrl,
-                                username = actualCredentials.username,
-                                password = actualCredentials.password
-                            )
-                            println("MainActivityFolderDebug: SubsonicRepository recreated. New instance: ${System.identityHashCode(subsonicRepository)}")
-
-                            val intentFolderId = currentActivityIntent?.getStringExtra("folderId")
-                            if (intentFolderId == null && currentFolderId == "al-1") {
-                                // Keep al-1 if it was the default and no new intent folderId
-                            } else if (intentFolderId != null) {
-                                currentFolderId = intentFolderId
-                            } else {
-                                currentFolderId = "al-1"
-                            }
-                            currentFolderName = ""
-                            folderEntries = emptyList()
-                            folderLoadingState = LoadingState.IDLE
-                            println("MainActivityFolderDebug: State set to IDLE due to credential/repository change. Folder ID: $currentFolderId")
-                        } else {
-                            println("MainActivityFolderDebug: Credentials match existing SubsonicRepository. Instance: ${System.identityHashCode(currentRepo)}. Credentials hash: ${actualCredentials.hashCode()}")
-                        }
+                        subsonicRepository = SubsonicRepository(
+                            baseUrl = actualCredentials.baseUrl,
+                            username = actualCredentials.username,
+                            password = actualCredentials.password
+                        )
+                        // currentFolderId = "al-1" // ← この行を削除しました (前の修正)
+                        currentFolderName = ""
+                        folderEntries = emptyList()
+                        folderLoadingState = LoadingState.IDLE
                     } else {
                         if (currentRepo != null) {
-                            println("MainActivityFolderDebug: Clearing SubsonicRepository. Old instance: ${System.identityHashCode(currentRepo)}")
                             subsonicRepository = null
                             folderEntries = emptyList()
                             folderLoadingState = LoadingState.IDLE
@@ -239,7 +178,6 @@ class MainActivity : ComponentActivity() {
                             parentFolderId = null
                             mediaController?.stop()
                             mediaController?.clearMediaItems()
-                            println("MainActivityFolderDebug: State set to IDLE due to credentials cleared.")
                         }
                     }
                 }
@@ -331,13 +269,12 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     topBar = {
                         TopAppBar(
-                            title = { Text(currentFolderName.ifEmpty { if (currentFolderId == "al-1" && folderLoadingState != LoadingState.SUCCESS) "Loading Album..." else if (folderLoadingState != LoadingState.SUCCESS) "Loading..." else "Folder" }) },
+                            title = { Text(currentFolderName.ifEmpty { "Folder" }) },
                             navigationIcon = {
                                 if (parentFolderId != null) {
                                     IconButton(onClick = {
                                         currentFolderId = parentFolderId
                                         folderLoadingState = LoadingState.IDLE
-                                        println("MainActivityFolderDebug: State changed to IDLE (TopAppBar Back). New Folder ID: $currentFolderId")
                                     }) {
                                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                                     }
@@ -345,7 +282,6 @@ class MainActivity : ComponentActivity() {
                             },
                             actions = {
                                 IconButton(onClick = {
-                                    println("MainActivityFolderDebug: Settings icon clicked. Show settings dialog.")
                                     showSettingsDialog = true
                                 }) {
                                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
@@ -354,11 +290,12 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 ) { innerPadding ->
-                    Box(modifier = Modifier.padding(innerPadding).fillMaxSize()) {
+                    Box(modifier = Modifier
+                        .padding(innerPadding)
+                        .fillMaxSize()) {
                         if (credentialsLoadingState === CredentialsLoadingMarker) {
                             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                 CircularProgressIndicator()
-                                Text("Loading settings...", modifier = Modifier.padding(top = 70.dp))
                             }
                         } else if (showSettingsDialog) {
                             SettingsDialog(
@@ -372,6 +309,12 @@ class MainActivity : ComponentActivity() {
                                 onSave = { newCredentials ->
                                     println("MainActivityFolderDebug: SettingsDialog save. New credentials hash: ${newCredentials.hashCode()}")
                                     scope.launch { userPreferencesRepository.saveCredentials(newCredentials) }
+                                    // Reset to default folder and clear related states when credentials are saved/overwritten
+                                    currentFolderId = "al-1"
+                                    folderLoadingState = LoadingState.IDLE
+                                    currentFolderName = ""
+                                    folderEntries = emptyList()
+                                    parentFolderId = null
                                     showSettingsDialog = false
                                 }
                             )
@@ -400,7 +343,8 @@ class MainActivity : ComponentActivity() {
                                 LoadingState.SUCCESS -> {
                                     val folderDisplayModifier = Modifier
                                         .fillMaxSize()
-                                        .graphicsLayer { currentBackEvent?.let { event ->
+                                        .graphicsLayer {
+                                            currentBackEvent?.let { event ->
                                                 val progress = event.progress
                                                 scaleX = 1f - progress * 0.1f
                                                 scaleY = 1f - progress * 0.1f
@@ -413,42 +357,33 @@ class MainActivity : ComponentActivity() {
                                                 if (progress < 0.01f) {
                                                     translationX = 0f
                                                 }
-                                            } }
+                                            }
+                                        }
                                     FolderDisplay(
                                         modifier = folderDisplayModifier,
                                         entries = folderEntries,
                                         currentPlayingTrackId = currentPlayingTrackId,
-                                        isMusicPlaying = isMusicPlaying, // Pass isMusicPlaying state
+                                        isMusicPlaying = isMusicPlaying,
                                         onFolderClick = { folder ->
-                                            if (folder is FolderEntry) {
-                                                currentFolderId = folder.id
-                                                folderLoadingState = LoadingState.IDLE
-                                                println("MainActivityFolderDebug: State changed to IDLE (onFolderClick). New Folder ID: $currentFolderId")
-                                            } else {
-                                                Toast.makeText(this@MainActivity, "Clicked item is not a folder.", Toast.LENGTH_SHORT).show()
-                                            }
+                                            currentFolderId = folder.id
+                                            folderLoadingState = LoadingState.IDLE
                                         },
-                                        onFileClick = { file -> // Entry object
-                                            actualCredentials?.let { creds ->
+                                        onFileClick = { file ->
+                                            actualCredentials.let { creds ->
                                                 val currentSubsonicRepository = subsonicRepository
-                                                if (file !is FolderEntry && currentSubsonicRepository != null) {
+                                                if (true && currentSubsonicRepository != null) {
                                                     // Optimistically set, listener will confirm
                                                     // currentPlayingTrackId = file.id (already done by listener or by clicking the same item)
                                                     // isMusicPlaying = true (will be set by listener)
                                                     scope.launch {
-                                                        var songDurationMs: Long? = null
-                                                        var songTitle: String = file.name
+                                                        var songDetails: SubsonicApiSong? = null
 
                                                         try {
                                                             // Fetch song details in a background thread
-                                                            val songDetails = withContext(Dispatchers.IO) {
+                                                            songDetails = withContext(Dispatchers.IO) {
                                                                 currentSubsonicRepository.getSongDetails(file.id)
                                                             }
-                                                            songDurationMs = songDetails.duration?.toLong()?.times(1000)
-                                                            println("MainActivity: Fetched song details for ${file.id} - Title: $songTitle, Duration: $songDurationMs ms")
                                                         } catch (e: Exception) {
-                                                            // Log error and optionally inform user, but proceed with playback if possible
-                                                            println("MainActivity: Error fetching song details for ${file.id}: ${e.message}")
                                                             withContext(Dispatchers.Main) {
                                                                 Toast.makeText(this@MainActivity, "Could not fetch song details. Proceeding without.", Toast.LENGTH_SHORT).show()
                                                             }
@@ -457,15 +392,14 @@ class MainActivity : ComponentActivity() {
                                                         val downloadUrl = "${creds.baseUrl}/rest/download?u=${creds.username}&p=${creds.password}&v=1.16.1&c=PureSWR&id=${file.id}"
                                                         val extrasBundle = Bundle().apply {
                                                             putString("folderId", currentFolderId)
-                                                            songDurationMs?.let { putLong("duration_ms", it) }
                                                         }
                                                         val mediaMetadataBuilder = MediaMetadata.Builder()
-                                                            .setTitle(songTitle)
-                                                            .setArtist("")
+                                                            .setTitle("${songDetails?.title} / ${songDetails?.artist}")
+                                                            .setArtist(songDetails?.path)
                                                             .setExtras(extrasBundle)
 
                                                         val mediaItem = MediaItem.Builder()
-                                                            .setUri(Uri.parse(downloadUrl))
+                                                            .setUri(downloadUrl.toUri())
                                                             .setMediaId(file.id)
                                                             .setMediaMetadata(mediaMetadataBuilder.build())
                                                             .build()
@@ -487,20 +421,18 @@ class MainActivity : ComponentActivity() {
                                                             // Toast.makeText(this@MainActivity, "Playing: $songTitle", Toast.LENGTH_SHORT).show() // Toast can be annoying on toggle
                                                         }
                                                     }
-                                                } else if (file is FolderEntry) {
-                                                    Toast.makeText(this@MainActivity, "Clicked item is a folder, not a playable file.", Toast.LENGTH_SHORT).show()
-                                                } else if (currentSubsonicRepository == null){
-                                                     Toast.makeText(this@MainActivity, "Error: Subsonic repository not available.", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(this@MainActivity, "Error: Subsonic repository not available.", Toast.LENGTH_SHORT).show()
                                                 }
-                                            } ?: run {
-                                                Toast.makeText(this@MainActivity, "Error: Credentials not available.", Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     )
                                 }
                                 LoadingState.ERROR -> {
                                     Column(
-                                        modifier = Modifier.fillMaxSize().padding(16.dp),
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(16.dp),
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         verticalArrangement = Arrangement.Center
                                     ) {
@@ -518,11 +450,10 @@ class MainActivity : ComponentActivity() {
                                 LoadingState.IDLE -> {
                                     Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                         CircularProgressIndicator()
-                                        Text("Initializing folder view...", modifier = Modifier.padding(top = 70.dp))
                                     }
                                 }
                             }
-                        } else if (actualCredentials != null && subsonicRepository == null) {
+                        } else if (subsonicRepository == null) {
                             Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
                                 CircularProgressIndicator()
                                 Text("Connecting to server...", modifier = Modifier.padding(top = 70.dp))
@@ -566,11 +497,6 @@ class MainActivity : ComponentActivity() {
         mediaController = null
         println("MainActivityPlayerDebug: MediaController released in onStop.")
     }
-}
-
-// Helper extension function, can be kept or removed if not widely used
-fun SubsonicRepository.matchesCredentials(creds: Credentials): Boolean {
-    return this.baseUrl == creds.baseUrl && this.username == creds.username
 }
 
 @Preview(showBackground = true)
