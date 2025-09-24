@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -112,7 +113,7 @@ class MainActivity : ComponentActivity() {
 
                         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                             currentPlayingTrackId = mediaItem?.mediaId ?: ""
-                            isMusicPlaying = mediaController?.isPlaying ?: false // Update based on current state
+                            isMusicPlaying = mediaController?.isPlaying ?: false
                             if (mediaItem == null) {
                                 isPlayerLoading = false
                             }
@@ -154,7 +155,6 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(currentActivityIntent) {
                     val newFolderIdFromIntent = currentActivityIntent?.getStringExtra("folderId")
-                    println("MainActivityFolderDebug: LaunchedEffect for new folder ID: $newFolderIdFromIntent")
                     if (newFolderIdFromIntent != null && currentFolderId != newFolderIdFromIntent) {
                         currentFolderId = newFolderIdFromIntent
                         folderLoadingState = LoadingState.IDLE
@@ -182,6 +182,10 @@ class MainActivity : ComponentActivity() {
                             username = actualCredentials.username,
                             password = actualCredentials.password
                         )
+                        // Reset folder state if credentials change and folder isn't from intent
+                        if (currentActivityIntent?.getStringExtra("folderId") == null) {
+                           currentFolderId = null
+                        }
                         folderLoadingState = LoadingState.IDLE
                     } else {
                         if (subsonicRepository != null) {
@@ -224,7 +228,7 @@ class MainActivity : ComponentActivity() {
                             folderLoadingState = LoadingState.ERROR
                             if (isActive) Toast.makeText(this@MainActivity, folderLoadError, Toast.LENGTH_LONG).show()
                         }
-                    } 
+                    }
                 }
 
                 Scaffold(
@@ -244,6 +248,47 @@ class MainActivity : ComponentActivity() {
                                 }
                             },
                             actions = {
+                                // Random Play Button
+                                IconButton(onClick = {
+                                    if (subsonicRepository != null) {
+                                        scope.launch {
+                                            isPlayerLoading = true
+                                            try {
+                                                val randomSong = withContext(Dispatchers.IO) {
+                                                    subsonicRepository!!.getRandomSong()
+                                                }
+                                                val extrasBundle = Bundle().apply {
+                                                    putString("folderId", randomSong.parentFolderId)
+                                                }
+                                                val mediaMetadata = MediaMetadata.Builder()
+                                                    .setTitle(randomSong.name)
+                                                    .setArtist(randomSong.dir)
+                                                    .setExtras(extrasBundle)
+                                                    .build()
+                                                val mediaItem = subsonicRepository!!
+                                                    .getStreamMediaItem(randomSong.id)
+                                                    .setMediaMetadata(mediaMetadata)
+                                                    .build()
+
+                                                withContext(Dispatchers.Main) {
+                                                    currentPlayingTrackId = randomSong.id
+                                                    // isPlayerLoading = true; // Already set before the try block
+                                                    mediaController?.setMediaItem(mediaItem)
+                                                    mediaController?.prepare()
+                                                    mediaController?.play()
+                                                }
+                                            } catch (e: Exception) {
+                                                isPlayerLoading = false
+                                                Toast.makeText(this@MainActivity, "Error playing random song: ${e.message}", Toast.LENGTH_LONG).show()
+                                            }
+                                        }
+                                    } else {
+                                        Toast.makeText(this@MainActivity, "Error: Subsonic repository not available.", Toast.LENGTH_SHORT).show()
+                                    }
+                                }) {
+                                    Icon(Icons.Filled.Shuffle, contentDescription = "Play Random Song")
+                                }
+                                // Settings Button
                                 IconButton(onClick = { showSettingsDialog = true }) {
                                     Icon(Icons.Filled.Settings, contentDescription = "Settings")
                                 }
@@ -282,7 +327,7 @@ class MainActivity : ComponentActivity() {
                             when (folderLoadingState) {
                                 LoadingState.LOADING -> Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) { CircularProgressIndicator() }
                                 LoadingState.SUCCESS -> {
-                                    val folderDisplayModifier = Modifier.fillMaxSize().graphicsLayer { /* ... back event graphics ... */
+                                    val folderDisplayModifier = Modifier.fillMaxSize().graphicsLayer {
                                          currentBackEvent?.let { event ->
                                             val progress = event.progress; scaleX = 1f - progress * 0.1f; scaleY = 1f - progress * 0.1f; alpha = 1f - progress * 0.3f
                                             translationX = when (event.swipeEdge) {

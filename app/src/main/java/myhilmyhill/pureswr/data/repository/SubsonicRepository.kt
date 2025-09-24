@@ -100,6 +100,27 @@ private data class SubsonicGetSongResponse(
     val response: SubsonicSongPayload? = null
 )
 
+// Data classes for parsing getRandomSongs.view response
+@Serializable
+private data class RandomSongsContainer( // Represents the object that holds the list of songs
+    val song: List<SubsonicApiSong>? = null
+)
+
+@Serializable
+private data class RandomSongsResponseContent(
+    val status: String,
+    val version: String? = null,
+    @SerialName("randomSongs") // The key in JSON that contains the songs, e.g., "randomSongs"
+    val songsContainer: RandomSongsContainer? = null,
+    val error: SubsonicError? = null
+)
+
+@Serializable
+private data class SubsonicGetRandomSongsResponse(
+    @SerialName("subsonic-response")
+    val response: RandomSongsResponseContent? = null
+)
+
 class SubsonicRepository(
     internal val baseUrl: String,
     internal val username: String,
@@ -181,7 +202,6 @@ class SubsonicRepository(
                 } else {
                     val fullPath = subsonicChild.path ?: ""
                     val name = fullPath.substringAfterLast("/")
-                    // Using the version of 'dir' calculation currently in your file
                     val dir = fullPath.substringBeforeLast("/", missingDelimiterValue = "/").ifEmpty { "/" }
                     MusicEntry(
                         id = subsonicChild.id,
@@ -225,6 +245,41 @@ class SubsonicRepository(
         } else {
             val error = responseBody.response?.error
             val errorMessage = error?.message ?: "Subsonic API reported failure for getSong (no specific error message in parsed response)"
+            val errorCode = error?.code
+            throw SubsonicApiException("$errorMessage. Raw response: '$responseText'", errorCode)
+        }
+    }
+
+    suspend fun getRandomSong(): MusicEntry {
+        val endpoint = "$restPath/getRandomSongs.view"
+        // Add 'size=1' to fetch only one song if the API supports it.
+        // Otherwise, it will fetch the default number (often 10) and we'll pick the first.
+        val httpResponse = performHttpRequest(endpoint) {
+             url.parameters.append("size", "1")
+        }
+        val responseText = httpResponse.bodyAsText()
+        val responseBody: SubsonicGetRandomSongsResponse = lenientJsonParser.decodeFromString(responseText)
+    
+        if (responseBody.response?.status == "ok") {
+            val songs = responseBody.response.songsContainer?.song
+            if (songs.isNullOrEmpty()) {
+                throw SubsonicApiException("No songs returned or song list is empty in getRandomSongs.view. Raw response: '$responseText'")
+            }
+            val randomApiSong = songs.first()
+
+            val fullPath = randomApiSong.path ?: ""
+            val name = fullPath.substringAfterLast("/")
+            val dir = fullPath.substringBeforeLast("/", missingDelimiterValue = "/").ifEmpty { "/" }
+
+            return MusicEntry(
+                id = randomApiSong.id,
+                name = name,
+                dir = dir,
+                parentFolderId = randomApiSong.parent
+            )
+        } else {
+            val error = responseBody.response?.error
+            val errorMessage = error?.message ?: "Subsonic API reported failure for getRandomSongs (no specific error message)"
             val errorCode = error?.code
             throw SubsonicApiException("$errorMessage. Raw response: '$responseText'", errorCode)
         }

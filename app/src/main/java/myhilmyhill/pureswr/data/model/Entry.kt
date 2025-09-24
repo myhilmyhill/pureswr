@@ -20,5 +20,6 @@ data class FolderEntry(
 data class MusicEntry(
     override val id: String,
     override val name: String,
-    val dir: String
+    val dir: String,
+    val parentFolderId: String? = null
 ) : Entry
