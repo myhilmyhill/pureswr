@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 import kotlinx.serialization.json.Json
+import myhilmyhill.pureswr.data.model.MusicEntry
 
 class SubsonicRepositoryTest {
     @Test

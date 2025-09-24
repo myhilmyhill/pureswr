@@ -54,8 +54,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import myhilmyhill.pureswr.data.model.Credentials
+import myhilmyhill.pureswr.data.model.Entry
 import myhilmyhill.pureswr.data.preferences.UserPreferencesRepository
-import myhilmyhill.pureswr.data.repository.Entry
 import myhilmyhill.pureswr.data.repository.SubsonicRepository
 import myhilmyhill.pureswr.ui.FolderDisplay
 import myhilmyhill.pureswr.ui.SettingsDialog

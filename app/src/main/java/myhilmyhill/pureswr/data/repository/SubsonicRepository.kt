@@ -3,7 +3,6 @@ package myhilmyhill.pureswr.data.repository
 
 import androidx.core.net.toUri
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import io.ktor.client.* // HttpClient
 import io.ktor.client.engine.cio.CIO
 import io.ktor.client.plugins.contentnegotiation.* // ContentNegotiation
@@ -11,35 +10,16 @@ import io.ktor.client.request.* // get, parameter, HttpRequestBuilder
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.* // appendPathSegments, URLBuilder
-import io.ktor.serialization.kotlinx.json.json // json
+import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.SerializationException
 import io.ktor.client.plugins.HttpTimeout
+import myhilmyhill.pureswr.data.model.FolderEntry
+import myhilmyhill.pureswr.data.model.MusicEntry
 
 class SubsonicApiException(message: String, val code: Int? = null) : Exception(message)
-
-@Serializable
-sealed interface Entry {
-    val id: String
-    val name: String
-}
-
-@Serializable
-data class FolderEntry(
-    override val id: String,
-    override val name: String,
-    val entries: List<Entry>,
-    val parentFolderId: String? = null
-) : Entry
-
-@Serializable
-data class MusicEntry(
-    override val id: String,
-    override val name: String,
-    val dir: String
-) : Entry
 
 @Serializable
 private data class SubsonicResponse(
@@ -82,7 +62,7 @@ private data class SubsonicError(
 )
 
 @Serializable
-data class SubsonicApiSong(
+private data class SubsonicApiSong(
     val id: String,
     val parent: String? = null,
     val isDir: Boolean = false,
@@ -193,7 +173,7 @@ class SubsonicRepository(
             val entries = directoryNode.child?.map { subsonicChild ->
                 if (subsonicChild.isDir) {
                     FolderEntry(
-                        id = subsonicChild.id ?: throw SubsonicApiException("subsonicChild.id is null. Raw response: '$responseText'"),
+                        id = subsonicChild.id,
                         name = subsonicChild.title ?: throw SubsonicApiException("subsonicChild.title are null. Raw response: '$responseText'"),
                         entries = emptyList(),
                         parentFolderId = if (subsonicChild.parent == "-1") null else subsonicChild.parent
@@ -204,7 +184,7 @@ class SubsonicRepository(
                     // Using the version of 'dir' calculation currently in your file
                     val dir = fullPath.substringBeforeLast("/", missingDelimiterValue = "/").ifEmpty { "/" }
                     MusicEntry(
-                        id = subsonicChild.id ?: throw SubsonicApiException("subsonicChild.id is null for music entry. Raw response: '$responseText'"),
+                        id = subsonicChild.id,
                         name = name,
                         dir = dir,
                     )
@@ -225,7 +205,7 @@ class SubsonicRepository(
         }
     }
 
-    suspend fun getSongDetails(songId: String): SubsonicApiSong {
+    private suspend fun getSongDetails(songId: String): SubsonicApiSong {
         val endpoint = "$restPath/getSong.view"
         val httpResponse = performHttpRequest(endpoint) {
             url.parameters.append("id", songId)
@@ -266,7 +246,7 @@ class SubsonicRepository(
     }
 
     fun close() {
-        if (httpClientOverride == null) { 
+        if (httpClientOverride == null) {
             client.close()
         }
     }

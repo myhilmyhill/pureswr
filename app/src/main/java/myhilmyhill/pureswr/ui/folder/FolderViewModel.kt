@@ -3,16 +3,15 @@ package myhilmyhill.pureswr.ui.folder
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dagger.hilt.android.lifecycle.HiltViewModel // Added Hilt import
-import javax.inject.Inject // Added Inject import
+import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-import myhilmyhill.pureswr.data.model.Credentials
+import myhilmyhill.pureswr.data.model.FolderEntry
 import myhilmyhill.pureswr.data.preferences.UserPreferencesRepository
-import myhilmyhill.pureswr.data.repository.FolderEntry
 import myhilmyhill.pureswr.data.repository.SubsonicRepository
 import myhilmyhill.pureswr.data.repository.SubsonicApiException
 
@@ -23,8 +22,8 @@ data class FolderUiState(
     val needsConfiguration: Boolean = false
 )
 
-@HiltViewModel // Added HiltViewModel annotation
-class FolderViewModel @Inject constructor( // Added Inject annotation
+@HiltViewModel
+class FolderViewModel @Inject constructor(
     private val userPreferencesRepository: UserPreferencesRepository
 ) : ViewModel() {
 

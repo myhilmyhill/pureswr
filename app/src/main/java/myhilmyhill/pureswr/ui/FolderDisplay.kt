@@ -26,9 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import myhilmyhill.pureswr.data.repository.Entry
-import myhilmyhill.pureswr.data.repository.FolderEntry
-import myhilmyhill.pureswr.data.repository.MusicEntry
+import myhilmyhill.pureswr.data.model.Entry
+import myhilmyhill.pureswr.data.model.FolderEntry
+import myhilmyhill.pureswr.data.model.MusicEntry
 import myhilmyhill.pureswr.ui.theme.PureswrTheme
 
 @Composable

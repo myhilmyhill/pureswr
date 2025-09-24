@@ -23,10 +23,6 @@ import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
 import com.google.common.collect.ImmutableList
-import android.os.Bundle // For MediaItem extras
-
-// App's R class for app-specific resources like ic_launcher_foreground
-// import myhilmyhill.pureswr.R // この行が重複している場合は削除してください (プロジェクト構成による)
 
 private const val PLAYER_CHANNEL_ID = "pureswr_player_channel"
 private const val PLAYER_NOTIFICATION_ID = 1
@@ -41,16 +37,14 @@ class PlaybackService : MediaSessionService() {
     override fun onCreate() {
         super.onCreate()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                PLAYER_CHANNEL_ID,
-                "Audio Playback",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            val notificationManager =
-                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
-        }
+        val channel = NotificationChannel(
+            PLAYER_CHANNEL_ID,
+            "Audio Playback",
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+        val notificationManager =
+            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
 
         // ExoPlayerの初期化
         player = ExoPlayer.Builder(this)
@@ -134,7 +128,7 @@ class PlaybackService : MediaSessionService() {
                 actionFactory: MediaNotification.ActionFactory,
                 onNotificationChangedCallback: MediaNotification.Provider.Callback
             ): MediaNotification {
-                val smallIconResId = myhilmyhill.pureswr.R.drawable.ic_launcher_foreground
+                val smallIconResId = R.drawable.ic_launcher_foreground
 
                 val notificationBuilder = NotificationCompat.Builder(this@PlaybackService, PLAYER_CHANNEL_ID)
                     .setSmallIcon(smallIconResId)
