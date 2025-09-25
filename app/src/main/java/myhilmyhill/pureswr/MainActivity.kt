@@ -269,6 +269,7 @@ class MainActivity : ComponentActivity() {
                                                     .build()
 
                                                 withContext(Dispatchers.Main) {
+                                                    Toast.makeText(this@MainActivity, "${randomSong.name}\n${randomSong.dir}", Toast.LENGTH_SHORT).show()
                                                     currentPlayingTrackId = randomSong.id
                                                     // isPlayerLoading = true; // Already set before the try block
                                                     mediaController?.setMediaItem(mediaItem)
