@@ -54,6 +54,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import myhilmyhill.pureswr.data.model.Credentials
 import myhilmyhill.pureswr.data.model.Entry
+import myhilmyhill.pureswr.data.model.MusicEntry
 import myhilmyhill.pureswr.data.preferences.UserPreferencesRepository
 import myhilmyhill.pureswr.data.repository.SubsonicRepository
 import myhilmyhill.pureswr.ui.FolderDisplay
@@ -68,8 +69,7 @@ private object CredentialsLoadingMarker
 class MainActivity : ComponentActivity() {
 
     private lateinit var userPreferencesRepository: UserPreferencesRepository
-    private var mediaController: MediaController? = null
-    private var playerListener: Player.Listener? = null
+    private var mediaControllerAsState by mutableStateOf<MediaController?>(null)
     private var currentActivityIntent by mutableStateOf<Intent?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,11 +78,12 @@ class MainActivity : ComponentActivity() {
         userPreferencesRepository = UserPreferencesRepository(this)
 
 //        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-//        val channel = notificationManager.getNotificationChannel("pureswr_player_channel")
+//        val channel = notificationManager.getNotificationChannel(\'pureswr_player_channel\')
 
         setContent {
             PureswrTheme {
                 val scope = rememberCoroutineScope()
+                val currentMediaController = mediaControllerAsState
 
                 var currentFolderId by remember { mutableStateOf<String?>(currentActivityIntent?.getStringExtra("folderId")) }
                 var currentFolderName by remember { mutableStateOf("") }
@@ -100,7 +101,7 @@ class MainActivity : ComponentActivity() {
                 val actualCredentials = if (credentialsLoadingState === CredentialsLoadingMarker) null else credentialsLoadingState as? Credentials
                 var subsonicRepository by remember { mutableStateOf<SubsonicRepository?>(null) }
 
-                DisposableEffect(mediaController) {
+                DisposableEffect(currentMediaController) {
                     val listenerImpl = object : Player.Listener {
                         override fun onIsPlayingChanged(isPlaying: Boolean) {
                             isMusicPlaying = isPlaying
@@ -111,7 +112,7 @@ class MainActivity : ComponentActivity() {
 
                         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                             currentPlayingTrackId = mediaItem?.mediaId ?: ""
-                            isMusicPlaying = mediaController?.isPlaying ?: false
+                            isMusicPlaying = currentMediaController?.isPlaying ?: false
                             if (mediaItem == null) {
                                 isPlayerLoading = false
                             }
@@ -125,9 +126,11 @@ class MainActivity : ComponentActivity() {
                                     isPlayerLoading = false
                                 }
                                 Player.STATE_BUFFERING -> {
-                                    // If we are buffering, it implies loading, but isPlayerLoading should have been set true by onFileClick.
-                                    // We don't set it to true here, as buffering can happen mid-track.
-                                    // We only set to false when loading is clearly done (READY, ENDED, IDLE, or isPlaying=true).
+                                    // isPlayerLoading should be true if a user action initiated loading.
+                                    // This callback might also occur during mid-track buffering,
+                                    // in which case we don't want to show a persistent spinner
+                                    // unless it was due to an initial load.
+                                    // The initial sync and click handlers are better for setting isPlayerLoading = true.
                                 }
                             }
                         }
@@ -138,16 +141,35 @@ class MainActivity : ComponentActivity() {
                             scope.launch { Toast.makeText(this@MainActivity, "Playback error: ${error.localizedMessage}", Toast.LENGTH_LONG).show() }
                         }
                     }
-                    playerListener = listenerImpl
-                    mediaController?.addListener(listenerImpl)
+                    currentMediaController?.addListener(listenerImpl)
 
-                    currentPlayingTrackId = mediaController?.currentMediaItem?.mediaId ?: ""
-                    isMusicPlaying = mediaController?.isPlaying ?: false
-                    isPlayerLoading = mediaController?.playbackState == Player.STATE_BUFFERING && currentPlayingTrackId.isNotEmpty()
+                    // Initial state synchronization
+                    if (currentMediaController != null) {
+                        currentPlayingTrackId = currentMediaController.currentMediaItem?.mediaId ?: ""
+                        isMusicPlaying = currentMediaController.isPlaying
+                        val playbackState = currentMediaController.playbackState
+                        val currentItem = currentMediaController.currentMediaItem
+
+                        if (currentMediaController.isPlaying) {
+                            isPlayerLoading = false // If playing, not loading
+                        } else {
+                            when (playbackState) {
+                                Player.STATE_READY,
+                                Player.STATE_ENDED,
+                                Player.STATE_IDLE -> isPlayerLoading = false // Definitively not loading
+                                Player.STATE_BUFFERING -> isPlayerLoading = currentItem != null // Loading if buffering a known item
+                                else -> isPlayerLoading = false // Default to not loading for other states
+                            }
+                        }
+                    } else {
+                        // Reset states if controller is null
+                        currentPlayingTrackId = ""
+                        isMusicPlaying = false
+                        isPlayerLoading = false
+                    }
 
                     onDispose {
-                        mediaController?.removeListener(listenerImpl)
-                        playerListener = null
+                        currentMediaController?.removeListener(listenerImpl)
                     }
                 }
 
@@ -180,7 +202,7 @@ class MainActivity : ComponentActivity() {
                             username = actualCredentials.username,
                             password = actualCredentials.password
                         )
-                        // Reset folder state if credentials change and folder isn't from intent
+                        // Reset folder state if credentials change and folder isn\'t from intent
                         if (currentActivityIntent?.getStringExtra("folderId") == null) {
                            currentFolderId = null
                         }
@@ -196,8 +218,8 @@ class MainActivity : ComponentActivity() {
                             isMusicPlaying = false
                             isPlayerLoading = false
                             parentFolderId = null
-                            mediaController?.stop()
-                            mediaController?.clearMediaItems()
+                            currentMediaController?.stop()
+                            currentMediaController?.clearMediaItems()
                         }
                     }
                 }
@@ -209,7 +231,7 @@ class MainActivity : ComponentActivity() {
                         folderLoadError = null
                         try {
                             val result = withContext(Dispatchers.IO) {
-                                withTimeoutOrNull(60000L) { repositoryAtLaunch.getFolderContents(currentFolderId) }
+                                withTimeoutOrNull(10000) { repositoryAtLaunch.getFolderContents(currentFolderId) }
                             }
                             if (result == null) {
                                 folderLoadError = "Error: Folder loading timed out for folderId: $currentFolderId."
@@ -238,7 +260,6 @@ class MainActivity : ComponentActivity() {
                                 if (parentFolderId != null) {
                                     IconButton(onClick = {
                                         currentFolderId = parentFolderId
-                                        currentFolderName = ""
                                         folderLoadingState = LoadingState.IDLE
                                     }) {
                                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -255,26 +276,14 @@ class MainActivity : ComponentActivity() {
                                                 val randomSong = withContext(Dispatchers.IO) {
                                                     subsonicRepository!!.getRandomSong()
                                                 }
-                                                val extrasBundle = Bundle().apply {
-                                                    putString("folderId", randomSong.parentFolderId)
-                                                }
-                                                val mediaMetadata = MediaMetadata.Builder()
-                                                    .setTitle(randomSong.name)
-                                                    .setArtist(randomSong.dir)
-                                                    .setExtras(extrasBundle)
-                                                    .build()
-                                                val mediaItem = subsonicRepository!!
-                                                    .getStreamMediaItem(randomSong.id)
-                                                    .setMediaMetadata(mediaMetadata)
-                                                    .build()
-
+                                                val mediaItem = createMediaItemFromEntry(randomSong, randomSong.parentFolderId, subsonicRepository!!)
                                                 withContext(Dispatchers.Main) {
                                                     Toast.makeText(this@MainActivity, "${randomSong.name}\n${randomSong.dir}", Toast.LENGTH_SHORT).show()
                                                     currentPlayingTrackId = randomSong.id
                                                     // isPlayerLoading = true; // Already set before the try block
-                                                    mediaController?.setMediaItem(mediaItem)
-                                                    mediaController?.prepare()
-                                                    mediaController?.play()
+                                                    currentMediaController?.setMediaItem(mediaItem)
+                                                    currentMediaController?.prepare()
+                                                    currentMediaController?.play()
                                                 }
                                             } catch (e: Exception) {
                                                 isPlayerLoading = false
@@ -351,25 +360,13 @@ class MainActivity : ComponentActivity() {
                                         onFileClick = { file ->
                                             if (subsonicRepository != null) {
                                                 scope.launch {
-                                                    val extrasBundle = Bundle().apply {
-                                                        putString("folderId", currentFolderId)
-                                                    }
-                                                    val mediaMetadata = MediaMetadata.Builder()
-                                                        .setTitle(file.name)
-                                                        .setArtist(file.dir)
-                                                        .setExtras(extrasBundle)
-                                                        .build()
-                                                    val mediaItem = subsonicRepository!!
-                                                        .getStreamMediaItem(file.id)
-                                                        .setMediaMetadata(mediaMetadata)
-                                                        .build()
-
+                                                    val mediaItem = createMediaItemFromEntry(file, currentFolderId, subsonicRepository!!)
                                                     withContext(Dispatchers.Main) {
                                                         currentPlayingTrackId = file.id
                                                         isPlayerLoading = true
-                                                        mediaController?.setMediaItem(mediaItem)
-                                                        mediaController?.prepare()
-                                                        mediaController?.play()
+                                                        currentMediaController?.setMediaItem(mediaItem)
+                                                        currentMediaController?.prepare()
+                                                        currentMediaController?.play()
                                                     }
                                                 }
                                             } else {
@@ -417,13 +414,27 @@ class MainActivity : ComponentActivity() {
         val sessionToken = SessionToken(this, ComponentName(this, PlaybackService::class.java))
         val controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
         controllerFuture.addListener({
-            mediaController = controllerFuture.get()
+            mediaControllerAsState = controllerFuture.get()
         }, MoreExecutors.directExecutor())
     }
 
     override fun onStop() {
         super.onStop()
-        mediaController?.release()
-        mediaController = null
+        mediaControllerAsState?.release()
+        mediaControllerAsState = null
+    }
+
+    private fun createMediaItemFromEntry(entry: MusicEntry, folderIdForExtras: String?, repository: SubsonicRepository): MediaItem {
+        val extrasBundle = Bundle().apply {
+            putString("folderId", folderIdForExtras)
+        }
+        val mediaMetadata = MediaMetadata.Builder()
+            .setTitle(entry.name)
+            .setArtist(entry.dir)
+            .setExtras(extrasBundle)
+            .build()
+        return repository.getStreamMediaItem(entry.id)
+            .setMediaMetadata(mediaMetadata)
+            .build()
     }
 }

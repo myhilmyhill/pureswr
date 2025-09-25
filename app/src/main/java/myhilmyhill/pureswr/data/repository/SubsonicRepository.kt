@@ -100,9 +100,8 @@ private data class SubsonicGetSongResponse(
     val response: SubsonicSongPayload? = null
 )
 
-// Data classes for parsing getRandomSongs.view response
 @Serializable
-private data class RandomSongsContainer( // Represents the object that holds the list of songs
+private data class RandomSongsContainer(
     val song: List<SubsonicApiSong>? = null
 )
 
@@ -110,7 +109,7 @@ private data class RandomSongsContainer( // Represents the object that holds the
 private data class RandomSongsResponseContent(
     val status: String,
     val version: String? = null,
-    @SerialName("randomSongs") // The key in JSON that contains the songs, e.g., "randomSongs"
+    @SerialName("randomSongs")
     val songsContainer: RandomSongsContainer? = null,
     val error: SubsonicError? = null
 )
