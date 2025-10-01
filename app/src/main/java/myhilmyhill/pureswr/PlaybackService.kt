@@ -3,8 +3,11 @@ package myhilmyhill.pureswr
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioManager
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
 import androidx.media3.common.AudioAttributes
@@ -26,6 +29,7 @@ class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer // ExoPlayerをクラスメンバーにする
     private lateinit var playerListener: Player.Listener // Listenerを保持
+    private var noisyAudioReceiver: BroadcastReceiver? = null
 
     @OptIn(UnstableApi::class)
     override fun onCreate() {
@@ -62,6 +66,18 @@ class PlaybackService : MediaSessionService() {
         player.addListener(playerListener)
 
         mediaSession = MediaSession.Builder(this, player).build()
+
+        // Register BroadcastReceiver for headphone disconnection
+        noisyAudioReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                    // Pause playback when headphones are disconnected
+                    player.pause()
+                }
+            }
+        }
+        val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        registerReceiver(noisyAudioReceiver, filter)
 
         setMediaNotificationProvider(object : MediaNotification.Provider {
             override fun createNotification(
@@ -125,6 +141,11 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        // Unregister BroadcastReceiver
+        noisyAudioReceiver?.let {
+            unregisterReceiver(it)
+            noisyAudioReceiver = null
+        }
         mediaSession?.run {
             player.removeListener(playerListener)
             player.release()
