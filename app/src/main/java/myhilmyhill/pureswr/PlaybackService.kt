@@ -5,9 +5,14 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
+import android.widget.Toast
 import androidx.annotation.OptIn
 import androidx.core.app.NotificationCompat
+import androidx.core.net.toUri
 import androidx.media3.common.AudioAttributes
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
@@ -17,15 +22,36 @@ import androidx.media3.session.MediaNotification
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.MediaStyleNotificationHelper
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import myhilmyhill.pureswr.data.preferences.UserPreferencesRepository
+import myhilmyhill.pureswr.data.repository.SubsonicRepository
+import javax.inject.Inject
 
 private const val PLAYER_CHANNEL_ID = "pureswr_player_channel"
 private const val PLAYER_NOTIFICATION_ID = 1
+private const val CUSTOM_COMMAND_RANDOM_PLAY = "RANDOM_PLAY"
 
+@AndroidEntryPoint
 class PlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer // ExoPlayerをクラスメンバーにする
     private lateinit var playerListener: Player.Listener // Listenerを保持
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    
+    @Inject
+    lateinit var userPreferencesRepository: UserPreferencesRepository
 
     @OptIn(UnstableApi::class)
     override fun onCreate() {
@@ -61,7 +87,50 @@ class PlaybackService : MediaSessionService() {
         }
         player.addListener(playerListener)
 
-        mediaSession = MediaSession.Builder(this, player).build()
+        // Create custom command for random play
+        val randomPlayCommand = SessionCommand(CUSTOM_COMMAND_RANDOM_PLAY, Bundle.EMPTY)
+        
+        // Create CommandButton for random play
+        val randomPlayButton = CommandButton.Builder()
+            .setDisplayName("Random")
+            .setSessionCommand(randomPlayCommand)
+            .setIconResId(R.drawable.ic_shuffle)
+            .build()
+        
+        // Create MediaSession with callback and custom layout
+        mediaSession = MediaSession.Builder(this, player)
+            .setCallback(object : MediaSession.Callback {
+                override fun onConnect(
+                    session: MediaSession,
+                    controller: MediaSession.ControllerInfo
+                ): MediaSession.ConnectionResult {
+                    val connectionResult = super.onConnect(session, controller)
+                    val availableSessionCommands = connectionResult.availableSessionCommands.buildUpon()
+                        .add(randomPlayCommand)
+                        .build()
+                    return MediaSession.ConnectionResult.accept(
+                        availableSessionCommands,
+                        connectionResult.availablePlayerCommands
+                    )
+                }
+
+                override fun onCustomCommand(
+                    session: MediaSession,
+                    controller: MediaSession.ControllerInfo,
+                    customCommand: SessionCommand,
+                    args: Bundle
+                ): ListenableFuture<SessionResult> {
+                    if (customCommand.customAction == CUSTOM_COMMAND_RANDOM_PLAY) {
+                        handleRandomPlay()
+                        return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+                    }
+                    return super.onCustomCommand(session, controller, customCommand, args)
+                }
+            })
+            .build()
+        
+        // Set custom layout on the session to include the random play button
+        mediaSession?.setCustomLayout(ImmutableList.of(randomPlayButton))
 
         setMediaNotificationProvider(object : MediaNotification.Provider {
             override fun createNotification(
@@ -98,6 +167,7 @@ class PlaybackService : MediaSessionService() {
                     .setStyle(mediaStyle)
                     .setContentIntent(pendingContentIntent)
 
+                // Add custom layout buttons (including random play button)
                 for (button in customLayout) {
                     notificationBuilder.addAction(actionFactory.createCustomActionFromCustomCommandButton(mediaSession, button))
                 }
@@ -124,6 +194,58 @@ class PlaybackService : MediaSessionService() {
         }
     }
 
+    private fun handleRandomPlay() {
+        serviceScope.launch {
+            try {
+                val credentials = userPreferencesRepository.credentialsFlow.firstOrNull()
+                if (credentials == null) {
+                    showToast("No credentials configured")
+                    return@launch
+                }
+                
+                val repository = SubsonicRepository(
+                    baseUrl = credentials.baseUrl,
+                    username = credentials.username,
+                    password = credentials.password
+                )
+                
+                val randomSong = repository.getRandomSong()
+                
+                // Create MediaItem from random song
+                val extrasBundle = Bundle().apply {
+                    putString("folderId", randomSong.parentFolderId)
+                }
+                val mediaMetadata = MediaMetadata.Builder()
+                    .setTitle(randomSong.name)
+                    .setArtist(randomSong.dir)
+                    .setExtras(extrasBundle)
+                    .build()
+                
+                val streamUrl = repository.getStreamMediaItem(randomSong.id)
+                    .setMediaMetadata(mediaMetadata)
+                    .build()
+                
+                // Play the random song
+                withContext(Dispatchers.Main) {
+                    player.setMediaItem(streamUrl)
+                    player.prepare()
+                    player.play()
+                    showToast("${randomSong.name}\n${randomSong.dir}")
+                }
+                
+                repository.close()
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    showToast("Error playing random song: ${e.message}")
+                }
+            }
+        }
+    }
+    
+    private fun showToast(message: String) {
+        Toast.makeText(this@PlaybackService, message, Toast.LENGTH_SHORT).show()
+    }
+
     override fun onDestroy() {
         mediaSession?.run {
             player.removeListener(playerListener)
@@ -131,6 +253,7 @@ class PlaybackService : MediaSessionService() {
             release()
             mediaSession = null
         }
+        serviceScope.cancel()
         super.onDestroy()
     }
 }
